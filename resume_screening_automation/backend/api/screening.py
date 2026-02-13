@@ -5,10 +5,10 @@ import hashlib
 
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException, BackgroundTasks
 
-from backend.db.session import SessionLocal
-from backend.db.models import ResumeRun, ResumeFile, ResumeResult, JobConfig
-from backend.services.resume_processor import process_single_resume
-from backend.services.scoring_engine import score_resume
+from db.session import SessionLocal
+from db.models import ResumeRun, ResumeFile, ResumeResult, JobConfig
+from services.resume_processor import process_single_resume
+from services.scoring_engine import score_resume
 
 router = APIRouter(prefix="/screening", tags=["Screening"])
 
