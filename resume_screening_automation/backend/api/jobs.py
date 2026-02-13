@@ -1,7 +1,7 @@
 from fastapi import APIRouter
-from backend.db.session import SessionLocal
-from backend.db.models import JobConfig
-from backend.services.ai_service import generate_job_config
+from db.session import SessionLocal
+from db.models import JobConfig
+from services.ai_service import generate_job_config
 from fastapi import HTTPException
 router = APIRouter()
 
