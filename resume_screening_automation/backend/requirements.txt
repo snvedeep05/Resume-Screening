@@ -1,0 +1,10 @@
+fastapi
+uvicorn
+streamlit
+sqlalchemy
+psycopg2-binary
+groq
+python-dotenv
+PyPDF2
+python-docx
+openpyxl
