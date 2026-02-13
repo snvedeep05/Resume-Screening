@@ -1,7 +1,7 @@
 import pdfplumber
 from docx import Document
 import os
-from backend.services.resume_ai_extractor import extract_resume_data
+from services.resume_ai_extractor import extract_resume_data
 
 def extract_text_from_pdf(path: str) -> str:
     text = []
