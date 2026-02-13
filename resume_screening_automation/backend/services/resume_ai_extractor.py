@@ -1,7 +1,7 @@
 import os
 import json
 from groq import Groq
-from backend.prompts.resume_extraction_prompt import RESUME_EXTRACTION_PROMPT
+from prompts.resume_extraction_prompt import RESUME_EXTRACTION_PROMPT
 
 client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 
