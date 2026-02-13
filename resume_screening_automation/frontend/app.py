@@ -2,7 +2,7 @@ import streamlit as st
 import os
 import json
 import requests
-from api_client import create_job, get_jobs, generate_job_config_ai
+from api_client import create_job, get_jobs, generate_job_config_ai, get_headers
 import pandas as pd
 from io import BytesIO
 import streamlit as st
@@ -221,7 +221,8 @@ with tab1:
                 res = requests.post(
                     f"{BACKEND_URL}/screening/start",
                     files=files,
-                    data=data
+                    data=data,
+                    headers=get_headers()
                 )
 
                 if res.status_code == 200:
@@ -276,7 +277,8 @@ with tab3:
     @st.cache_data(ttl=300)
     def fetch_all_results(job_id):
         res = requests.get(
-            f"{BACKEND_URL}/screening/results/{job_id}"
+            f"{BACKEND_URL}/screening/results/{job_id}",
+            headers=get_headers()
         )
         if res.status_code != 200:
             return pd.DataFrame()
