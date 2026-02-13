@@ -1,7 +1,7 @@
 import os
 import json
 from groq import Groq
-from backend.prompts.recruiter_prompt import JOB_CONFIG_PROMPT
+from prompts.recruiter_prompt import JOB_CONFIG_PROMPT
 
 client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 
