@@ -1,10 +1,8 @@
 import requests
-import os
-from dotenv import load_dotenv
+import streamlit as st
 
-load_dotenv()
+BACKEND_URL = st.secrets["BACKEND_URL"]
 
-BACKEND_URL = os.getenv("BACKEND_URL")
 
 def create_job(job_title, job_config):
     response = requests.post(
