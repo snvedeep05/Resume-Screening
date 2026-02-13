@@ -1,6 +1,6 @@
 from fastapi import FastAPI
-from backend.api.jobs import router as jobs_router
-from backend.api.screening import router as screening_router
+from resume_screening_automation.backend.api.jobs import router as jobs_router
+from resume_screening_automation.backend.api.screening import router as screening_router
 
 app = FastAPI(title="Resume Screening Backend")
 
