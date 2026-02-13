@@ -5,22 +5,19 @@ import requests
 from api_client import create_job, get_jobs, generate_job_config_ai
 import pandas as pd
 from io import BytesIO
-BACKEND_URL = os.getenv("BACKEND_URL")
+import streamlit as st
 
-
-from dotenv import load_dotenv
 
 # MUST BE FIRST
 st.set_page_config(page_title="Resume Screening System", layout="wide")
 
-load_dotenv()
 
-APP_USERNAME = os.getenv("APP_USERNAME")
-APP_PASSWORD = os.getenv("APP_PASSWORD")
-BACKEND_URL = os.getenv("BACKEND_URL")
 
-# 👇 PUT YOUR LOGO IMAGE PATH OR URL HERE
-COMPANY_LOGO = os.getenv("COMPANY_LOGO")
+APP_USERNAME = st.secrets["APP_USERNAME"]
+APP_PASSWORD = st.secrets["APP_PASSWORD"]
+BACKEND_URL = st.secrets["BACKEND_URL"]
+COMPANY_LOGO = st.secrets["COMPANY_LOGO"]
+
 
 if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
