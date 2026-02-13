@@ -1,10 +1,5 @@
-fastapi
-uvicorn
 streamlit
-sqlalchemy
-psycopg2-binary
-groq
+requests
 python-dotenv
-PyPDF2
-python-docx
+pandas
 openpyxl
