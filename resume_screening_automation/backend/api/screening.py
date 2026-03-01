@@ -130,6 +130,10 @@ def process_zip_and_screen(
                     try:
                         resume_id = get_or_create_resume(db, resume_path)
 
+                        if resume_id is None:
+                            print(f"[RUN {run_id}] ❌ Failed to create resume record → {file_name}")
+                            run.failed_count += 1
+                            continue  
                         # 🔎 Check if already processed for this job
                         existing_result = db.query(ResumeResult).filter_by(
                             resume_id=resume_id,
@@ -194,21 +198,17 @@ def process_zip_and_screen(
                         run.processed_count += 1
 
                     except Exception as e:
-                        db.add(
-                            ResumeResult(
-                                run_id=run_id,
-                                resume_id=None,
-                                job_id=job_id,
-                                score=0,
-                                decision="failed",
-                                ai_status="failed",
-                                error_message=str(e)
-                            )
-                        )
+                        print(f"[RUN {run_id}] ❌ Error processing {file_name}: {e}")
                         run.failed_count += 1
+                        db.rollback()   # ✅ reset failed transaction
+                        continue        # 🔁 skip to next resume
 
                     finally:
-                        db.commit()
+                        try:
+                            db.commit()
+                        except Exception:
+                            db.rollback()
+                        
 
         run.status = "completed"
         db.commit()
