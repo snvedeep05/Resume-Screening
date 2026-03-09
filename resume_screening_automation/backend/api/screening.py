@@ -144,9 +144,26 @@ def process_zip_and_screen(
                         if existing_result:
                             print(f"[RUN {run_id}] Reusing existing result for job")
 
-                            existing_result.run_id = run_id
-                            existing_result.processed_at = datetime.utcnow()
-                            existing_result.ai_status = "reused"
+                            # Copy fields, delete old row, insert fresh — so it appears as a new entry
+                            old_extracted = existing_result.extracted_data
+                            old_score = existing_result.score
+                            old_decision = existing_result.decision
+                            old_reason = existing_result.decision_reason
+
+                            db.delete(existing_result)
+                            db.flush()
+
+                            db.add(ResumeResult(
+                                run_id=run_id,
+                                resume_id=resume_id,
+                                job_id=job_id,
+                                extracted_data=old_extracted,
+                                score=old_score,
+                                decision=old_decision,
+                                decision_reason=old_reason,
+                                ai_status="reused",
+                                processed_at=datetime.utcnow()
+                            ))
 
                         else:
                             # 🔎 Check if extracted before (for other jobs)
