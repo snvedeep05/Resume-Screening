@@ -215,34 +215,90 @@ with tab2:
 
             # Show editable config once loaded
             if st.session_state.job_config and st.session_state.edit_job_id == selected_job_id:
+                current_title = existing_jobs[[j["job_id"] for j in existing_jobs].index(selected_job_id)]["job_title"]
+
                 updated_title = st.text_input(
                     "Job Title",
-                    value=existing_jobs[[j["job_id"] for j in existing_jobs].index(selected_job_id)]["job_title"],
+                    value=current_title,
                     key="update_job_title"
                 )
 
-                updated_config_text = st.text_area(
-                    "Edit Job Config (JSON)",
-                    value=json.dumps(st.session_state.job_config, indent=2),
-                    height=350,
-                    key="update_job_config_text"
+                update_method = st.radio(
+                    "How do you want to update the config?",
+                    ["Edit JSON directly", "Regenerate from new Job Description (AI)"],
+                    horizontal=True,
+                    key="update_method"
                 )
 
-                st.info("Saving will deactivate the current version and create a new one with an incremented version number. Old results are preserved.")
+                if update_method == "Edit JSON directly":
+                    updated_config_text = st.text_area(
+                        "Edit Job Config (JSON)",
+                        value=json.dumps(st.session_state.job_config, indent=2),
+                        height=350,
+                        key="update_job_config_text"
+                    )
 
-                if st.button("Save Updated Job Config", key="save_update"):
-                    try:
-                        final_config = json.loads(updated_config_text)
-                        result = update_job(selected_job_id, updated_title, final_config)
-                        st.success(
-                            f"Updated! New Job ID: {result['job_id']} — Version: v{result['version']}"
+                    st.info("Saving will deactivate the current version and create a new one with an incremented version number. Old results are preserved.")
+
+                    if st.button("Save Updated Job Config", key="save_update_json"):
+                        try:
+                            final_config = json.loads(updated_config_text)
+                            result = update_job(selected_job_id, updated_title, final_config)
+                            st.success(
+                                f"Updated! New Job ID: {result['job_id']} — Version: v{result['version']}"
+                            )
+                            st.session_state.job_config = None
+                            st.session_state.edit_job_id = None
+                        except json.JSONDecodeError:
+                            st.error("Invalid JSON — please fix the formatting before saving")
+                        except Exception as e:
+                            st.error(f"Failed to update job config: {e}")
+
+                else:
+                    new_job_description = st.text_area(
+                        "Paste new Job Description",
+                        height=200,
+                        key="update_jd_text"
+                    )
+
+                    if "update_generated_config" not in st.session_state:
+                        st.session_state.update_generated_config = None
+
+                    if st.button("Generate New Config via AI", key="gen_update"):
+                        if not new_job_description:
+                            st.error("Please paste a job description first")
+                        else:
+                            try:
+                                new_config = generate_job_config_ai(new_job_description)
+                                st.session_state.update_generated_config = new_config
+                                st.success("AI generated new config. Review before saving.")
+                            except Exception as e:
+                                st.error(f"AI generation failed: {e}")
+
+                    if st.session_state.update_generated_config:
+                        reviewed_config_text = st.text_area(
+                            "Review / Edit Generated Config (JSON)",
+                            value=json.dumps(st.session_state.update_generated_config, indent=2),
+                            height=350,
+                            key="update_reviewed_config"
                         )
-                        st.session_state.job_config = None
-                        st.session_state.edit_job_id = None
-                    except json.JSONDecodeError:
-                        st.error("Invalid JSON format")
-                    except Exception as e:
-                        st.error(f"Failed to update job config: {e}")
+
+                        st.info("Saving will deactivate the current version and create a new one with an incremented version number. Old results are preserved.")
+
+                        if st.button("Save as New Version", key="save_update_ai"):
+                            try:
+                                final_config = json.loads(reviewed_config_text)
+                                result = update_job(selected_job_id, updated_title, final_config)
+                                st.success(
+                                    f"Updated! New Job ID: {result['job_id']} — Version: v{result['version']}"
+                                )
+                                st.session_state.job_config = None
+                                st.session_state.edit_job_id = None
+                                st.session_state.update_generated_config = None
+                            except json.JSONDecodeError:
+                                st.error("Invalid JSON — please fix the formatting before saving")
+                            except Exception as e:
+                                st.error(f"Failed to update job config: {e}")
 
 # ======================================================
 # TAB 1: RESUME SCREENING
