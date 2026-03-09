@@ -236,7 +236,7 @@ def get_results(job_id: int):
 
         results = db.query(ResumeResult).filter(
             ResumeResult.job_id == job_id
-        ).all()
+        ).order_by(ResumeResult.processed_at.desc()).all()
 
         output = []
 

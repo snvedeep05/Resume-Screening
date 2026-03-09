@@ -460,8 +460,8 @@ with tab3:
     )
 
     sort_order = st.selectbox(
-        "Sort by Score",
-        ["Descending", "Ascending"],
+        "Sort by",
+        ["Score: High to Low", "Score: Low to High", "Recently Processed"],
         key="results_sort_order"
     )
 
@@ -490,10 +490,13 @@ with tab3:
         filtered_df["score"] >= min_score
     ]
 
-    filtered_df = filtered_df.sort_values(
-        by="score",
-        ascending=(sort_order == "Ascending")
-    )
+    if sort_order == "Recently Processed":
+        filtered_df = filtered_df.sort_values(by="processed_at", ascending=False)
+    else:
+        filtered_df = filtered_df.sort_values(
+            by="score",
+            ascending=(sort_order == "Score: Low to High")
+        )
 
     # ----------------------------
     # SUMMARY METRICS
