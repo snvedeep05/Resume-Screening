@@ -478,7 +478,7 @@ with tab3:
 
     if to_date:
         filtered_df = filtered_df[
-            filtered_df["processed_at"] <= pd.to_datetime(to_date)
+            filtered_df["processed_at"] < pd.to_datetime(to_date) + pd.Timedelta(days=1)
         ]
 
     if decision_filter != "All":
