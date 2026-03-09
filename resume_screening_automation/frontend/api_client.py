@@ -44,6 +44,15 @@ def generate_job_config_ai(job_description):
     return response.json()["job_config"]
 
 
+def get_job(job_id):
+    response = requests.get(
+        f"{BACKEND_URL}/jobs/{job_id}",
+        headers=get_headers()
+    )
+    response.raise_for_status()
+    return response.json()
+
+
 def update_job(job_id, job_title, job_config):
     response = requests.patch(
         f"{BACKEND_URL}/jobs/{job_id}",

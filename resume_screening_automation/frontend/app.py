@@ -2,7 +2,7 @@ import streamlit as st
 import os
 import json
 import requests
-from api_client import create_job, get_jobs, generate_job_config_ai, get_headers
+from api_client import create_job, get_jobs, get_job, generate_job_config_ai, update_job, get_headers
 import pandas as pd
 from io import BytesIO
 import streamlit as st
@@ -122,52 +122,127 @@ tab1, tab2, tab3 = st.tabs(["🟦 Resume Screening", "🟩 Job Config Builder", 
 with tab2:
     st.subheader("Job Config Builder (AI Assisted)")
 
-    job_title = st.text_input("Job Title")
-    job_description = st.text_area(
-        "Job Description (paste JD here)",
-        height=200
+    # --- MODE SELECTOR ---
+    mode = st.radio(
+        "Mode",
+        ["Create New Job", "Update Existing Job"],
+        horizontal=True,
+        key="job_config_mode"
     )
 
     if "job_config" not in st.session_state:
         st.session_state.job_config = None
+    if "edit_job_id" not in st.session_state:
+        st.session_state.edit_job_id = None
 
-    col1, col2 = st.columns(2)
-
-    # --- AI GENERATION ---
-    with col1:
-        if st.button("Generate Job Config via AI"):
-            if not job_description:
-                st.error("Please provide Job Description")
-            else:
-                try:
-                    job_config = generate_job_config_ai(job_description)
-                    st.session_state.job_config = job_config
-                    st.success("AI generated job config. Please review before saving.")
-                except Exception as e:
-                    st.error(f"AI generation failed: {e}")
-
-    # --- SHOW EDITABLE JSON ONLY IF EXISTS ---
-    if st.session_state.job_config:
-        job_config_text = st.text_area(
-            "Review / Edit Job Config (JSON)",
-            value=json.dumps(st.session_state.job_config, indent=2),
-            height=300
+    # -----------------------------------------------
+    # CREATE NEW JOB
+    # -----------------------------------------------
+    if mode == "Create New Job":
+        job_title = st.text_input("Job Title", key="new_job_title")
+        job_description = st.text_area(
+            "Job Description (paste JD here)",
+            height=200,
+            key="new_job_desc"
         )
 
-        with col2:
-            if st.button("Save Job Config"):
-                if not job_title:
-                    st.error("Job title is required")
+        col1, col2 = st.columns(2)
+
+        with col1:
+            if st.button("Generate Job Config via AI", key="gen_new"):
+                if not job_description:
+                    st.error("Please provide Job Description")
                 else:
                     try:
-                        final_job_config = json.loads(job_config_text)
-                        result = create_job(job_title, final_job_config)
-                        st.success(f"Job config saved (ID: {result['job_id']})")
+                        job_config = generate_job_config_ai(job_description)
+                        st.session_state.job_config = job_config
+                        st.success("AI generated job config. Please review before saving.")
+                    except Exception as e:
+                        st.error(f"AI generation failed: {e}")
+
+        if st.session_state.job_config:
+            job_config_text = st.text_area(
+                "Review / Edit Job Config (JSON)",
+                value=json.dumps(st.session_state.job_config, indent=2),
+                height=300,
+                key="new_job_config_text"
+            )
+
+            with col2:
+                if st.button("Save Job Config", key="save_new"):
+                    if not job_title:
+                        st.error("Job title is required")
+                    else:
+                        try:
+                            final_job_config = json.loads(job_config_text)
+                            result = create_job(job_title, final_job_config)
+                            st.success(f"Job config saved (ID: {result['job_id']})")
+                            st.session_state.job_config = None
+                        except json.JSONDecodeError:
+                            st.error("Invalid JSON format")
+                        except Exception as e:
+                            st.error(f"Failed to save job config: {e}")
+
+    # -----------------------------------------------
+    # UPDATE EXISTING JOB
+    # -----------------------------------------------
+    else:
+        existing_jobs = get_jobs()
+        if not existing_jobs:
+            st.warning("No active job configs found. Create one first.")
+        else:
+            job_options = {
+                f"{j['job_title']} (v{j['version']}) — ID {j['job_id']}": j["job_id"]
+                for j in existing_jobs
+            }
+
+            selected_label = st.selectbox(
+                "Select Job to Update",
+                list(job_options.keys()),
+                key="update_job_select"
+            )
+            selected_job_id = job_options[selected_label]
+
+            # Load button — fetches current config from backend
+            if st.button("Load Current Config", key="load_existing"):
+                try:
+                    job_data = get_job(selected_job_id)
+                    st.session_state.job_config = job_data["job_config"]
+                    st.session_state.edit_job_id = selected_job_id
+                    st.success(f"Loaded config for: {job_data['job_title']} (v{job_data['version']})")
+                except Exception as e:
+                    st.error(f"Failed to load job: {e}")
+
+            # Show editable config once loaded
+            if st.session_state.job_config and st.session_state.edit_job_id == selected_job_id:
+                updated_title = st.text_input(
+                    "Job Title",
+                    value=existing_jobs[[j["job_id"] for j in existing_jobs].index(selected_job_id)]["job_title"],
+                    key="update_job_title"
+                )
+
+                updated_config_text = st.text_area(
+                    "Edit Job Config (JSON)",
+                    value=json.dumps(st.session_state.job_config, indent=2),
+                    height=350,
+                    key="update_job_config_text"
+                )
+
+                st.info("Saving will deactivate the current version and create a new one with an incremented version number. Old results are preserved.")
+
+                if st.button("Save Updated Job Config", key="save_update"):
+                    try:
+                        final_config = json.loads(updated_config_text)
+                        result = update_job(selected_job_id, updated_title, final_config)
+                        st.success(
+                            f"Updated! New Job ID: {result['job_id']} — Version: v{result['version']}"
+                        )
                         st.session_state.job_config = None
+                        st.session_state.edit_job_id = None
                     except json.JSONDecodeError:
                         st.error("Invalid JSON format")
                     except Exception as e:
-                        st.error(f"Failed to save job config: {e}")
+                        st.error(f"Failed to update job config: {e}")
 
 # ======================================================
 # TAB 1: RESUME SCREENING

@@ -38,6 +38,24 @@ def list_jobs():
         db.close()
 
 
+@router.get("/{job_id}")
+def get_job(job_id: int):
+    db = SessionLocal()
+    try:
+        job = db.query(JobConfig).filter(JobConfig.job_id == job_id).first()
+        if not job:
+            raise HTTPException(status_code=404, detail="Job not found")
+        return {
+            "job_id": job.job_id,
+            "job_title": job.job_title,
+            "job_config": job.job_config,
+            "version": job.version,
+            "is_active": job.is_active
+        }
+    finally:
+        db.close()
+
+
 @router.patch("/{job_id}")
 def update_job(job_id: int, payload: dict):
     db = SessionLocal()
