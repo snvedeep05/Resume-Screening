@@ -25,14 +25,51 @@ def create_job(payload: dict):
 def list_jobs():
     db = SessionLocal()
     try:
-        jobs = db.query(JobConfig).all()
+        jobs = db.query(JobConfig).filter(JobConfig.is_active == True).all()
         return [
             {
                 "job_id": j.job_id,
-                "job_title": j.job_title
+                "job_title": j.job_title,
+                "version": j.version
             }
             for j in jobs
         ]
+    finally:
+        db.close()
+
+
+@router.patch("/{job_id}")
+def update_job(job_id: int, payload: dict):
+    db = SessionLocal()
+    try:
+        old_job = db.query(JobConfig).filter(
+            JobConfig.job_id == job_id,
+            JobConfig.is_active == True
+        ).first()
+
+        if not old_job:
+            raise HTTPException(status_code=404, detail="Job not found or already inactive")
+
+        # Deactivate the old version
+        old_job.is_active = False
+        db.commit()
+
+        # Create the new version
+        new_job = JobConfig(
+            job_title=payload.get("job_title", old_job.job_title),
+            job_config=payload.get("job_config", old_job.job_config),
+            version=old_job.version + 1,
+            is_active=True
+        )
+        db.add(new_job)
+        db.commit()
+        db.refresh(new_job)
+
+        return {
+            "job_id": new_job.job_id,
+            "version": new_job.version,
+            "job_title": new_job.job_title
+        }
     finally:
         db.close()
 

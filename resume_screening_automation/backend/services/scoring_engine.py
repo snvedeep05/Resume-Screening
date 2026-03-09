@@ -26,7 +26,7 @@ def score_resume(job_config: dict, extracted_data: dict) -> tuple[int, str]:
         normalize(s) for s in job_config.get("required_skills", [])
     }
     resume_skills = {
-        normalize(s) for s in extracted_data.get("skills", [])
+        normalize(s) for s in extracted_data.get("skills") or []
     }
 
     if required_skills:
@@ -68,7 +68,7 @@ def score_resume(job_config: dict, extracted_data: dict) -> tuple[int, str]:
         .get("domains", [])
     }
 
-    for project in extracted_data.get("projects", []):
+    for project in extracted_data.get("projects") or []:
         project_domain = normalize(project.get("domain", ""))
 
         if project_domain in job_domains:
@@ -90,7 +90,7 @@ def score_resume(job_config: dict, extracted_data: dict) -> tuple[int, str]:
     }
     resume_degrees = {
         normalize(e.get("degree", ""))
-        for e in extracted_data.get("education", [])
+        for e in extracted_data.get("education") or []
     }
 
     if allowed_degrees & resume_degrees:
@@ -111,6 +111,5 @@ def score_resume(job_config: dict, extracted_data: dict) -> tuple[int, str]:
     # FINALIZE
     # -------------------------------------------------
     final_score = min(int(score), 100)
-    decision = "shortlisted" if final_score >= 60 else "rejected"
 
     return final_score, "; ".join(reasons)

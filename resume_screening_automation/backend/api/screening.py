@@ -2,6 +2,7 @@ import os
 import zipfile
 import tempfile
 import hashlib
+from datetime import datetime
 
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException, BackgroundTasks
 
@@ -143,23 +144,16 @@ def process_zip_and_screen(
                         if existing_result:
                             print(f"[RUN {run_id}] Reusing existing result for job")
 
-                            db.add(
-                                ResumeResult(
-                                    run_id=run_id,
-                                    resume_id=resume_id,
-                                    job_id=job_id,
-                                    extracted_data=existing_result.extracted_data,
-                                    score=existing_result.score,
-                                    decision=existing_result.decision,
-                                    decision_reason=existing_result.decision_reason,
-                                    ai_status="reused"
-                                )
-                            )
+                            existing_result.run_id = run_id
+                            existing_result.processed_at = datetime.utcnow()
+                            existing_result.ai_status = "reused"
 
                         else:
                             # 🔎 Check if extracted before (for other jobs)
-                            previous_any = db.query(ResumeResult).filter_by(
-                                resume_id=resume_id
+                            # Only reuse if extracted_data is not None (skip failed results)
+                            previous_any = db.query(ResumeResult).filter(
+                                ResumeResult.resume_id == resume_id,
+                                ResumeResult.extracted_data.isnot(None)
                             ).first()
 
                             if previous_any:
@@ -210,11 +204,20 @@ def process_zip_and_screen(
                             db.rollback()
                         
 
+        run.ended_at = datetime.utcnow()
         run.status = "completed"
         db.commit()
         print(f"[RUN {run_id}] Completed")
 
     finally:
+        try:
+            stale = db.query(ResumeRun).filter_by(run_id=run_id).first()
+            if stale and stale.status == "running":
+                stale.status = "crashed"
+                stale.ended_at = datetime.utcnow()
+                db.commit()
+        except Exception:
+            pass
         db.close()
 
 
