@@ -461,7 +461,7 @@ with tab3:
 
     sort_order = st.selectbox(
         "Sort by",
-        ["Score: High to Low", "Score: Low to High", "Recently Processed"],
+        ["Recently Processed", "Score: High to Low", "Score: Low to High"],
         key="results_sort_order"
     )
 
