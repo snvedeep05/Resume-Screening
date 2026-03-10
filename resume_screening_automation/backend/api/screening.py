@@ -148,6 +148,11 @@ def process_zip_and_screen(
                             existing_result.processed_at = datetime.utcnow()
                             existing_result.ai_status = "reused"
 
+                            # Backfill passed_out_year if missing but present in stored data
+                            if existing_result.passed_out_year is None and existing_result.extracted_data:
+                                raw_year = existing_result.extracted_data.get("passed_out_year")
+                                existing_result.passed_out_year = int(raw_year) if raw_year is not None else None
+
                         else:
                             # 🔎 Check if extracted before (for other jobs)
                             # Only reuse if extracted_data is not None (skip failed results)
@@ -176,6 +181,9 @@ def process_zip_and_screen(
 
                             decision = "shortlisted" if score >= 60 else "rejected"
 
+                            raw_year = extracted_data.get("passed_out_year")
+                            passed_out_year = int(raw_year) if raw_year is not None else None
+
                             db.add(
                                 ResumeResult(
                                     run_id=run_id,
@@ -185,6 +193,7 @@ def process_zip_and_screen(
                                     score=score,
                                     decision=decision,
                                     decision_reason=reason,
+                                    passed_out_year=passed_out_year,
                                     ai_status="success"
                                 )
                             )
@@ -248,7 +257,8 @@ def get_results(job_id: int):
                     "full_name": pd_data.get("full_name"),
                     "email": pd_data.get("email"),
                     "phone": pd_data.get("phone"),
-                    "job_title": job.job_title,   # ✅ NEW COLUMN
+                    "job_title": job.job_title,
+                    "passed_out_year": r.passed_out_year,
                     "score": r.score,
                     "decision": r.decision,
                     "decision_reason": r.decision_reason,

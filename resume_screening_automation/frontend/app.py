@@ -425,6 +425,10 @@ with tab3:
     if "processed_at" in df.columns:
         df["processed_at"] = pd.to_datetime(df["processed_at"])
 
+    # Convert passed_out_year to nullable int (avoids 2025.0 display)
+    if "passed_out_year" in df.columns:
+        df["passed_out_year"] = df["passed_out_year"].astype("Int64")
+
     # ----------------------------
     # FILTERS
     # ----------------------------
@@ -445,11 +449,21 @@ with tab3:
             key="results_to_date"
         )
 
-    decision_filter = st.selectbox(
-        "Decision",
-        ["All", "shortlisted", "rejected"],
-        key="results_decision_filter"
-    )
+    col3, col4 = st.columns(2)
+
+    with col3:
+        decision_filter = st.selectbox(
+            "Decision",
+            ["All", "shortlisted", "rejected"],
+            key="results_decision_filter"
+        )
+
+    with col4:
+        year_filter = st.selectbox(
+            "Passed Out Year",
+            ["All", "2025 & above", "2026 & above", "2027 & above"],
+            key="results_year_filter"
+        )
 
     min_score = st.slider(
         "Minimum Score",
@@ -484,6 +498,13 @@ with tab3:
     if decision_filter != "All":
         filtered_df = filtered_df[
             filtered_df["decision"] == decision_filter
+        ]
+
+    if year_filter != "All" and "passed_out_year" in filtered_df.columns:
+        min_year = int(year_filter.split("&")[0].strip())
+        filtered_df = filtered_df[
+            filtered_df["passed_out_year"].notna() &
+            (filtered_df["passed_out_year"] >= min_year)
         ]
 
     filtered_df = filtered_df[
@@ -523,8 +544,15 @@ with tab3:
 
     st.subheader("Results")
 
+    display_cols = [
+        "full_name", "email", "phone",
+        "job_title", "passed_out_year",
+        "score", "decision", "decision_reason", "processed_at"
+    ]
+    display_cols = [c for c in display_cols if c in filtered_df.columns]
+
     st.dataframe(
-        filtered_df,
+        filtered_df[display_cols],
         use_container_width=True
     )
 

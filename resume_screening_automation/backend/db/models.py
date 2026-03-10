@@ -60,6 +60,7 @@ class ResumeResult(Base):
     score = Column(Integer)
     decision = Column(Text)
     decision_reason = Column(Text)
+    passed_out_year = Column(Integer)
 
     ai_status = Column(Text)
     error_message = Column(Text)

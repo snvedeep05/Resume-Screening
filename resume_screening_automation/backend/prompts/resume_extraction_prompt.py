@@ -19,7 +19,8 @@ The JSON must STRICTLY follow this schema and MUST include ALL keys.
     {
       "degree": string,
       "field": string,
-      "institution": string
+      "institution": string,
+      "passed_out_year": number | null
     }
   ],
 
@@ -31,7 +32,9 @@ The JSON must STRICTLY follow this schema and MUST include ALL keys.
     }
   ],
 
-  "experience_years": number
+  "experience_years": number,
+
+  "passed_out_year": number | null
 }
 
 RULES:
@@ -44,4 +47,6 @@ RULES:
 - Extract email ONLY if explicitly present
 - Do NOT hallucinate names, emails, degrees, or companies
 - Infer project domains conservatively (e.g. "web", "backend", "ai", "ml")
+- "passed_out_year" (top-level) is the year the candidate completed or is expected to complete their most recent degree (B.Tech or equivalent). Extract from graduation year, passing year, or expected graduation year mentioned in the resume. Use null if not found.
+- For each education entry, "passed_out_year" is the year that specific degree was or will be completed. Use null if not mentioned.
 """
