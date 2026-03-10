@@ -182,6 +182,8 @@ def process_zip_and_screen(
                             decision = "shortlisted" if score >= 60 else "rejected"
 
                             raw_year = extracted_data.get("passed_out_year")
+                            if raw_year is None and previous_any is not None:
+                                raw_year = previous_any.passed_out_year
                             passed_out_year = int(raw_year) if raw_year is not None else None
 
                             db.add(
