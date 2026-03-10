@@ -8,6 +8,10 @@ app = FastAPI(
     swagger_ui_parameters={"persistAuthorization": True}
 )
 
+@app.get("/health")
+def health():
+    return {"status": "ok"}
+
 # 🔒 Protect all routes with API key
 app.include_router(jobs_router, prefix="/jobs", dependencies=[Depends(verify_api_key)])
 app.include_router(screening_router, dependencies=[Depends(verify_api_key)])
