@@ -1,7 +1,10 @@
 import pdfplumber
 from docx import Document
 import os
+import logging
 from services.resume_ai_extractor import extract_resume_data
+
+logging.getLogger("pdfminer").setLevel(logging.ERROR)
 
 def extract_text_from_pdf(path: str) -> str:
     text = []
