@@ -207,8 +207,8 @@ def process_zip_and_screen(
 
                     except RateLimitError as e:
                         print(f"[RUN {run_id}] ⏳ Groq rate limit hit: {file_name}")
-                        run.failed_count += 1
                         db.rollback()
+                        run.failed_count += 1
                         if resume_id:
                             try:
                                 db.add(ResumeResult(
@@ -225,8 +225,8 @@ def process_zip_and_screen(
 
                     except Exception as e:
                         print(f"[RUN {run_id}] ❌ Error processing {file_name}: {e}")
-                        run.failed_count += 1
                         db.rollback()
+                        run.failed_count += 1
                         if resume_id:
                             try:
                                 db.add(ResumeResult(
