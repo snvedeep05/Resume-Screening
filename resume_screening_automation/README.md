@@ -664,13 +664,9 @@ These are areas where the current implementation has known limitations or incomp
 
 ---
 
-### 1. `ended_at` is never set
+### 1. ~~`ended_at` is never set~~ ✅ Resolved
 
-**Location:** `backend/db/models.py` → `ResumeRun.ended_at`, `backend/api/screening.py` → `process_zip_and_screen()`
-
-The `ended_at` column exists in the `resume_runs` table but is never written to in the code. The run completion sets `status = "completed"` but leaves `ended_at` as `NULL`.
-
-**Suggested fix:** Set `run.ended_at = datetime.utcnow()` just before `run.status = "completed"` at the end of `process_zip_and_screen()`.
+`run.ended_at` is set in both the happy path (`status = "completed"`) and the crash guard in the `finally` block. No action needed.
 
 ---
 
@@ -694,23 +690,15 @@ The `file_path` stored in `resume_files` points to a path inside a temporary dir
 
 ---
 
-### 4. Failed resumes leave no trace in `resume_results`
+### 4. ~~Failed resumes leave no trace in `resume_results`~~ ✅ Resolved
 
-**Location:** `backend/api/screening.py` → `process_zip_and_screen()`
-
-When a resume fails to process (AI error, parse error, etc.), only `run.failed_count` is incremented. No `ResumeResult` record is created with an error status, so there is no way to see *which* resumes failed or *why* from the results API.
-
-**Suggested fix:** In the `except` block, insert a `ResumeResult` row with `ai_status="failed"` and `error_message=str(e)` so failures are traceable per resume.
+Both `except` handlers now insert a `ResumeResult` row (when `resume_id` is available) with `ai_status="failed"` or `ai_status="rate_limited"` and `error_message=str(e)`, making every failure traceable per resume.
 
 ---
 
-### 5. Decision is computed twice
+### 5. ~~Decision is computed twice~~ ✅ Resolved
 
-**Location:** `backend/services/scoring_engine.py` → `score_resume()` and `backend/api/screening.py` → `process_zip_and_screen()`
-
-`score_resume()` internally computes and returns a `decision` value (line 114 of scoring_engine.py), but the caller in `screening.py` ignores it and recomputes `decision` itself using the same `>= 60` threshold. This duplication means the threshold logic lives in two places and could drift out of sync.
-
-**Suggested fix:** Use the `decision` value returned by `score_resume()` directly in the caller instead of recomputing it. Remove the redundant line from `screening.py`.
+`score_resume()` returns `(score, reason)` only — no decision. The `>= 60` threshold is computed in one place only (`screening.py`). No duplication exists.
 
 ---
 
@@ -749,3 +737,9 @@ The batch size is hardcoded to `10` in the frontend POST request (`"batch_size":
 **Location:** `backend/db/session.py`
 
 The SQLAlchemy engine is created with `pool_pre_ping=True`. This means before handing out a connection from the pool, SQLAlchemy issues a lightweight ping to check the connection is still alive. This is important when connecting to cloud-hosted databases (e.g., Neon, Supabase) that may close idle connections. It adds a tiny overhead per request but prevents `OperationalError: SSL connection has been closed unexpectedly` errors in production.
+
+---
+
+### 10. ~~Groq rate limit causes silent mid-run failures with no per-resume trace~~ ✅ Resolved
+
+`groq.RateLimitError` is now caught separately before the generic `except Exception` handler. A `ResumeResult` row with `ai_status="rate_limited"` and the error message is inserted for each rate-limited resume (when `resume_id` is available). Rate-limited resumes are now distinguishable from other failures in the results.

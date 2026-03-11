@@ -5,6 +5,7 @@ import hashlib
 from datetime import datetime
 
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException, BackgroundTasks
+from groq import RateLimitError
 
 from db.session import SessionLocal
 from db.models import ResumeRun, ResumeFile, ResumeResult, JobConfig
@@ -128,6 +129,7 @@ def process_zip_and_screen(
                         f"{overall_index}/{len(resume_files)} → {file_name}"
                     )
 
+                    resume_id = None
                     try:
                         resume_id = get_or_create_resume(db, resume_path)
 
@@ -202,11 +204,41 @@ def process_zip_and_screen(
 
                         run.processed_count += 1
 
+                    except RateLimitError as e:
+                        print(f"[RUN {run_id}] ⏳ Groq rate limit hit: {file_name}")
+                        run.failed_count += 1
+                        db.rollback()
+                        if resume_id:
+                            try:
+                                db.add(ResumeResult(
+                                    run_id=run_id,
+                                    resume_id=resume_id,
+                                    job_id=job_id,
+                                    ai_status="rate_limited",
+                                    error_message=str(e)
+                                ))
+                                db.commit()
+                            except Exception:
+                                db.rollback()
+                        continue
+
                     except Exception as e:
                         print(f"[RUN {run_id}] ❌ Error processing {file_name}: {e}")
                         run.failed_count += 1
-                        db.rollback()   # ✅ reset failed transaction
-                        continue        # 🔁 skip to next resume
+                        db.rollback()
+                        if resume_id:
+                            try:
+                                db.add(ResumeResult(
+                                    run_id=run_id,
+                                    resume_id=resume_id,
+                                    job_id=job_id,
+                                    ai_status="failed",
+                                    error_message=str(e)
+                                ))
+                                db.commit()
+                            except Exception:
+                                db.rollback()
+                        continue
 
                     finally:
                         try:
