@@ -43,7 +43,24 @@ This silences all pdfminer warnings and info messages while preserving actual er
 
 ---
 
-#### 3. Groq Free Tier Rate Limit — Known Behavior
+#### 3. Re-run Bug Fixed — Failed Resumes Now Re-extracted on Retry
+**Why:** After P1 (per-resume failure tracing), a new bug was introduced: re-uploading the same ZIP to retry failed/rate-limited resumes would silently "reuse" those rows without calling AI again. The `existing_result` check matched any row for `(resume_id, job_id)` — including failed rows with `extracted_data=NULL`.
+
+**Fix:** Changed the reuse query to filter `extracted_data IS NOT NULL`:
+
+```python
+existing_result = db.query(ResumeResult).filter(
+    ResumeResult.resume_id == resume_id,
+    ResumeResult.job_id == job_id,
+    ResumeResult.extracted_data.isnot(None)
+).first()
+```
+
+**Impact:** Re-uploading the same ZIP now correctly re-extracts previously failed resumes. Already-successful resumes still hit the fast reuse path (no AI call, no token usage).
+
+---
+
+#### 4. Groq Free Tier Rate Limit — Known Behavior
 **Limit:** Groq's free tier allows **500,000 tokens per day**, resetting at **midnight UTC (5:30 AM IST)**.
 
 **Observed behavior:** On large batches (~650+ resumes), the daily token limit can be exhausted mid-run. Affected resumes get `failed_count` incremented and are skipped. The run still completes for all other resumes.
