@@ -137,10 +137,11 @@ def process_zip_and_screen(
                             print(f"[RUN {run_id}] ❌ Failed to create resume record → {file_name}")
                             run.failed_count += 1
                             continue  
-                        # 🔎 Check if already processed for this job
-                        existing_result = db.query(ResumeResult).filter_by(
-                            resume_id=resume_id,
-                            job_id=job_id
+                        # 🔎 Check if already processed for this job (skip failed rows)
+                        existing_result = db.query(ResumeResult).filter(
+                            ResumeResult.resume_id == resume_id,
+                            ResumeResult.job_id == job_id,
+                            ResumeResult.extracted_data.isnot(None)
                         ).first()
 
                         if existing_result:
