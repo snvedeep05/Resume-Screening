@@ -4,6 +4,54 @@ An AI-powered resume screening system that automatically extracts, scores, and r
 
 ---
 
+## Recent Updates
+
+### March 2026
+
+#### 1. `/health` Endpoint Added — UptimeRobot Support
+**Why:** Render's free tier spins down any web service after **15 minutes of no incoming HTTP requests**. Background processing tasks (resume screening) do not count as activity — so the server was shutting down mid-run on large batches.
+
+**Fix:** Added a public `/health` endpoint in `backend/main.py` that returns `{ "status": "ok" }`. This endpoint is intentionally **not protected** by the API key, so external monitors can call it freely.
+
+```python
+@app.api_route("/health", methods=["GET", "HEAD"])
+def health():
+    return {"status": "ok"}
+```
+
+The endpoint supports both `GET` and `HEAD` methods because UptimeRobot sends **HEAD requests** by default. Using `@app.api_route` instead of `@app.get` was required — `@app.get` returns `405 Method Not Allowed` for HEAD.
+
+**UptimeRobot setup:** A monitor is configured to ping `{BACKEND_URL}/health` every **5 minutes**, keeping the Render server alive throughout batch runs. Status is confirmed 100% Operational in UptimeRobot dashboard.
+
+---
+
+#### 2. pdfminer FontBBox Warnings Suppressed
+**Why:** Render logs were being flooded with repeated warnings:
+```
+Could not get FontBBox from font descriptor because None cannot be parsed as 4 floats
+```
+These come from `pdfminer` (used internally by `pdfplumber`) when a PDF has a malformed font descriptor. They are **harmless** — text extraction still completes correctly — but they bury real log output.
+
+**Fix:** Added logging suppression at the top of `backend/services/resume_processor.py`:
+
+```python
+import logging
+logging.getLogger("pdfminer").setLevel(logging.ERROR)
+```
+
+This silences all pdfminer warnings and info messages while preserving actual errors.
+
+---
+
+#### 3. Groq Free Tier Rate Limit — Known Behavior
+**Limit:** Groq's free tier allows **500,000 tokens per day**, resetting at **midnight UTC (5:30 AM IST)**.
+
+**Observed behavior:** On large batches (~650+ resumes), the daily token limit can be exhausted mid-run. Affected resumes get `failed_count` incremented and are skipped. The run still completes for all other resumes.
+
+**Recovery:** Re-run the same ZIP file after 5:30 AM IST. Resumes that were already processed successfully hit the **reuse path** (no AI call, no token usage). Only the failed ones are re-extracted using fresh daily tokens.
+
+---
+
 ## Table of Contents
 
 - [Overview](#overview)
@@ -168,6 +216,14 @@ app.include_router(screening_router, dependencies=[Depends(verify_api_key)])
 
 All routes require a valid `x-api-key` header. Swagger UI is available at `/docs` with persistent authorization enabled.
 
+**Public endpoint (no API key required):**
+
+| Method       | Path      | Description                                              |
+|--------------|-----------|----------------------------------------------------------|
+| GET / HEAD   | `/health` | Returns `{ "status": "ok" }` — used by UptimeRobot to keep the Render server alive |
+
+The `/health` endpoint supports HEAD requests because UptimeRobot sends HEAD by default. Without this, Render's free-tier server would spin down after 15 minutes of inactivity and terminate mid-run background tasks.
+
 ---
 
 ### Security
@@ -264,6 +320,8 @@ Handles raw text extraction from resume files before passing to AI.
 - `process_single_resume(resume_path)` — Dispatches to the correct extractor by file extension, then calls `extract_resume_data()` to get structured AI output
 
 Raises exceptions for unsupported formats or empty resume content.
+
+**Note:** pdfminer (used internally by pdfplumber) is suppressed to `ERROR` level at module load time to eliminate noisy `FontBBox` warnings from PDFs with malformed font descriptors. Text extraction is unaffected.
 
 ---
 
