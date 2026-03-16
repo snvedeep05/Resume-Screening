@@ -18,19 +18,42 @@ def show_brevo_usage():
     pct       = min(used / BREVO_DAILY_LIMIT, 1.0)
 
     if pct >= 0.9:
-        icon = "🔴"
+        dot_color = "#ef4444"
+        label     = "Critical"
     elif pct >= 0.67:
-        icon = "🟡"
+        dot_color = "#f59e0b"
+        label     = "Moderate"
     else:
-        icon = "🟢"
+        dot_color = "#22c55e"
+        label     = "Healthy"
 
-    st.markdown(f"#### {icon} Brevo Daily Usage")
+    bar_filled = int(pct * 20)
+    bar_str    = "█" * bar_filled + "░" * (20 - bar_filled)
 
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Sent Today",  f"{used} / {BREVO_DAILY_LIMIT}")
-    c2.metric("Remaining",   remaining)
-    c3.metric("Delivered",   stats["delivered"])
-    c4.metric("Bounced",     bounces)
-
-    st.progress(pct)
-    st.divider()
+    st.markdown(
+        f"""
+        <div style="
+            background:#f9fafb;
+            border:1px solid #e5e7eb;
+            border-radius:10px;
+            padding:10px 18px;
+            display:flex;
+            align-items:center;
+            gap:20px;
+            flex-wrap:wrap;
+            margin-bottom:6px;
+        ">
+            <span style="font-size:13px; font-weight:600; color:#111827;">
+                📬 Brevo&nbsp;<span style="color:{dot_color};">●</span>&nbsp;{label}
+            </span>
+            <span style="font-family:monospace; font-size:13px; color:#374151;">
+                {bar_str}&nbsp;<b>{used}/{BREVO_DAILY_LIMIT}</b>
+            </span>
+            <span style="font-size:13px; color:#6b7280;">🟩 {remaining} left</span>
+            <span style="font-size:13px; color:#6b7280;">✅ {stats["delivered"]} delivered</span>
+            <span style="font-size:13px; color:#6b7280;">⚠️ {bounces} bounced</span>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    st.markdown("<div style='margin-bottom:12px'></div>", unsafe_allow_html=True)

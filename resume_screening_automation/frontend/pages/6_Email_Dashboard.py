@@ -51,11 +51,16 @@ c4.metric("Assignment",   int(assignment))
 
 st.divider()
 
-# ── Bar chart ─────────────────────────────────────────────────────────────────
-st.markdown("### Emails by Type")
-chart_data = df_logs["email_type"].value_counts().reset_index()
-chart_data.columns = ["Email Type", "Count"]
-st.bar_chart(chart_data.set_index("Email Type"))
+# ── Bar chart — Shortlisted vs Rejected per date ──────────────────────────────
+st.markdown("### Emails Sent by Date")
+chart_df = df_logs[df_logs["email_type"].isin(["Shortlisted", "Rejected"])].copy()
+chart_df["date"] = chart_df["sent_at"].dt.date
+pivot = chart_df.groupby(["date", "email_type"]).size().unstack(fill_value=0)
+# ensure both columns exist even if one type has zero sends
+for col in ["Shortlisted", "Rejected"]:
+    if col not in pivot.columns:
+        pivot[col] = 0
+st.bar_chart(pivot[["Shortlisted", "Rejected"]])
 
 st.divider()
 
