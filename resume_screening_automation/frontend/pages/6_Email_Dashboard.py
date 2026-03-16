@@ -58,7 +58,7 @@ chart_df = df_logs[df_logs["email_type"].isin(["Shortlisted", "Rejected"])].copy
 chart_df["date"] = chart_df["sent_at"].dt.strftime("%d %b %Y")
 grouped = chart_df.groupby(["date", "email_type"]).size().reset_index(name="Count")
 
-chart = alt.Chart(grouped).mark_bar().encode(
+chart = alt.Chart(grouped).mark_bar(size=35).encode(
     x=alt.X("date:N", title="Date", sort=None),
     xOffset=alt.XOffset("email_type:N"),
     y=alt.Y("Count:Q", title="Count"),
