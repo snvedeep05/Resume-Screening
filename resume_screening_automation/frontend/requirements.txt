@@ -2,5 +2,7 @@ streamlit
 requests
 pandas
 openpyxl
-brevo-python
+brevo-python==1.2.0
 email-validator
+sqlalchemy
+psycopg2-binary
