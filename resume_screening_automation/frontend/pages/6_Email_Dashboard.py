@@ -59,17 +59,17 @@ chart_df["date"] = chart_df["sent_at"].dt.strftime("%d %b %Y")
 grouped = chart_df.groupby(["date", "email_type"]).size().reset_index(name="Count")
 
 chart = alt.Chart(grouped).mark_bar().encode(
-    x=alt.X("email_type:N", title=None, axis=alt.Axis(labels=False, ticks=False)),
+    x=alt.X("date:N", title="Date", sort=None),
+    xOffset=alt.XOffset("email_type:N"),
     y=alt.Y("Count:Q", title="Count"),
     color=alt.Color(
         "email_type:N",
         scale=alt.Scale(domain=["Shortlisted", "Rejected"], range=["#4f86f7", "#ef4444"]),
         legend=alt.Legend(title="Type")
-    ),
-    column=alt.Column("date:N", title="Date", spacing=8)
-).properties(width=55, height=300)
+    )
+).properties(height=300)
 
-st.altair_chart(chart)
+st.altair_chart(chart, use_container_width=True)
 
 st.divider()
 
