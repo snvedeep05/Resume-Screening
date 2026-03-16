@@ -30,31 +30,39 @@ def show_brevo_usage():
     bar_filled = int(pct * 20)
     bar_str    = "█" * bar_filled + "░" * (20 - bar_filled)
 
-    st.markdown(
-        f"""
-        <div style="
-            background:#f9fafb;
-            border:1px solid #e5e7eb;
-            border-radius:10px;
-            padding:10px 18px;
-            display:flex;
-            align-items:center;
-            gap:20px;
-            flex-wrap:wrap;
-            margin-bottom:6px;
-        ">
-            <span style="font-size:13px; font-weight:600; color:#111827;">
-                📬 Brevo&nbsp;<span style="color:{dot_color};">●</span>&nbsp;{label}
-            </span>
-            <span style="font-family:monospace; font-size:13px; color:#374151;">
-                {bar_str}&nbsp;<b>{used}/{BREVO_DAILY_LIMIT}</b>
-            </span>
-            <span style="font-size:13px; color:#6b7280;">🟩 {remaining} left</span>
-            <span style="font-size:13px; color:#6b7280;">✅ {stats["delivered"]} delivered</span>
-            <span style="font-size:13px; color:#6b7280;">⚠️ {bounces} bounced</span>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+    col_banner, col_btn = st.columns([11, 1])
+
+    with col_banner:
+        st.markdown(
+            f"""
+            <div style="
+                background:#f9fafb;
+                border:1px solid #e5e7eb;
+                border-radius:10px;
+                padding:10px 18px;
+                display:flex;
+                align-items:center;
+                gap:20px;
+                flex-wrap:wrap;
+            ">
+                <span style="font-size:13px; font-weight:600; color:#111827;">
+                    📬 Brevo&nbsp;<span style="color:{dot_color};">●</span>&nbsp;{label}
+                </span>
+                <span style="font-family:monospace; font-size:13px; color:#374151;">
+                    {bar_str}&nbsp;<b>{used}/{BREVO_DAILY_LIMIT}</b>
+                </span>
+                <span style="font-size:13px; color:#6b7280;">🟩 {remaining} left</span>
+                <span style="font-size:13px; color:#6b7280;">✅ {stats["delivered"]} delivered</span>
+                <span style="font-size:13px; color:#6b7280;">⚠️ {bounces} bounced</span>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+    with col_btn:
+        if st.button("↺", help="Refresh Brevo usage"):
+            st.cache_data.clear()
+            st.rerun()
+
     st.markdown("<div style='margin-bottom:12px'></div>", unsafe_allow_html=True)
 
