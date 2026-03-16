@@ -83,4 +83,5 @@ class BrevoClient:
             "delivered":    delivered,
             "hard_bounces": hard_bounces,
             "soft_bounces": soft_bounces,
+            "debug_plans":  str(plans) if "plans" in dir() else "plans not reached",
         }
