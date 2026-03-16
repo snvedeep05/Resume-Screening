@@ -11,43 +11,34 @@ An AI-powered resume screening system that automatically extracts, scores, and r
 #### 1. `/health` Endpoint Added — UptimeRobot Support
 **Why:** Render's free tier spins down any web service after **15 minutes of no incoming HTTP requests**. Background processing tasks (resume screening) do not count as activity — so the server was shutting down mid-run on large batches.
 
-**Fix:** Added a public `/health` endpoint in `backend/main.py` that returns `{ "status": "ok" }`. This endpoint is intentionally **not protected** by the API key, so external monitors can call it freely.
+**Fix:** Added a public `/health` endpoint in `backend/main.py`. Registered as two separate decorators so GET and HEAD have distinct OpenAPI operation IDs (avoids Swagger duplicate operation ID warning):
 
 ```python
-@app.api_route("/health", methods=["GET", "HEAD"])
+@app.get("/health")
 def health():
     return {"status": "ok"}
+
+@app.head("/health", include_in_schema=False)
+def health_head():
+    pass
 ```
 
-The endpoint supports both `GET` and `HEAD` methods because UptimeRobot sends **HEAD requests** by default. Using `@app.api_route` instead of `@app.get` was required — `@app.get` returns `405 Method Not Allowed` for HEAD.
-
-**UptimeRobot setup:** A monitor is configured to ping `{BACKEND_URL}/health` every **5 minutes**, keeping the Render server alive throughout batch runs. Status is confirmed 100% Operational in UptimeRobot dashboard.
+**UptimeRobot setup:** A monitor is configured to ping `{BACKEND_URL}/health` every **5 minutes**, keeping the Render server alive throughout batch runs.
 
 ---
 
 #### 2. pdfminer FontBBox Warnings Suppressed
-**Why:** Render logs were being flooded with repeated warnings:
-```
-Could not get FontBBox from font descriptor because None cannot be parsed as 4 floats
-```
-These come from `pdfminer` (used internally by `pdfplumber`) when a PDF has a malformed font descriptor. They are **harmless** — text extraction still completes correctly — but they bury real log output.
+**Why:** Render logs were flooded with repeated harmless warnings from `pdfminer`. Text extraction is unaffected.
 
-**Fix:** Added logging suppression at the top of `backend/services/resume_processor.py`:
-
+**Fix:** Added at the top of `backend/services/resume_processor.py`:
 ```python
-import logging
 logging.getLogger("pdfminer").setLevel(logging.ERROR)
 ```
-
-This silences all pdfminer warnings and info messages while preserving actual errors.
 
 ---
 
 #### 3. Re-run Bug Fixed — Failed Resumes Now Re-extracted on Retry
-**Why:** After P1 (per-resume failure tracing), a new bug was introduced: re-uploading the same ZIP to retry failed/rate-limited resumes would silently "reuse" those rows without calling AI again. The `existing_result` check matched any row for `(resume_id, job_id)` — including failed rows with `extracted_data=NULL`.
-
-**Fix:** Changed the reuse query to filter `extracted_data IS NOT NULL`:
-
+**Fix:** Changed the reuse query to filter `extracted_data IS NOT NULL` so failed rows are not treated as valid cached results:
 ```python
 existing_result = db.query(ResumeResult).filter(
     ResumeResult.resume_id == resume_id,
@@ -56,16 +47,54 @@ existing_result = db.query(ResumeResult).filter(
 ).first()
 ```
 
-**Impact:** Re-uploading the same ZIP now correctly re-extracts previously failed resumes. Already-successful resumes still hit the fast reuse path (no AI call, no token usage).
+---
+
+#### 4. `failed_count` Not Persisting After Rollback — Fixed
+**Why:** `run.failed_count += 1` was called before `db.rollback()` in both except handlers. After rollback, SQLAlchemy expires all session objects — discarding the in-memory increment. `failed_count` in the DB never actually updated for failed/rate-limited resumes.
+
+**Fix:** Moved `run.failed_count += 1` to after `db.rollback()` in both handlers so SQLAlchemy re-loads the fresh DB value before incrementing.
 
 ---
 
-#### 4. Groq Free Tier Rate Limit — Known Behavior
-**Limit:** Groq's free tier allows **500,000 tokens per day**, resetting at **midnight UTC (5:30 AM IST)**.
+#### 5. Groq Rate Limit — Early Exit Added
+**Why:** Once Groq's daily token limit is hit, every subsequent API call in the same run also fails — wasting time attempting calls that will all error. Old resumes (already extracted) were being incorrectly marked as `rate_limited` instead of being reused.
 
-**Observed behavior:** On large batches (~650+ resumes), the daily token limit can be exhausted mid-run. Affected resumes get `failed_count` incremented and are skipped. The run still completes for all other resumes.
+**Fix:** Added a `rate_limit_hit` flag. On first `RateLimitError`:
+- All subsequent **new** resumes are marked `rate_limited` immediately (no API call)
+- All subsequent **old** resumes (with existing `extracted_data`) are still reused normally — Groq is not called for them regardless
 
-**Recovery:** Re-run the same ZIP file after 5:30 AM IST. Resumes that were already processed successfully hit the **reuse path** (no AI call, no token usage). Only the failed ones are re-extracted using fresh daily tokens.
+---
+
+#### 6. Email Automation Integrated via Streamlit Multipage
+**What:** Brevo Email Automation merged into the Resume Screening app using Streamlit's `pages/` directory. No changes to `app.py`. Three new pages added:
+
+| Page | File | Description |
+|---|---|---|
+| 📧 Shortlisting Emails | `pages/4_Shortlisting_Emails.py` | Send shortlist/rejection emails via Brevo |
+| 📝 Assignment Emails | `pages/5_Assignment_Emails.py` | Send assignment emails to interested candidates |
+| 📊 Email Dashboard | `pages/6_Email_Dashboard.py` | Email log, metrics, grouped bar chart by date |
+
+All pages are login-guarded via `st.session_state.get("logged_in")`.
+
+---
+
+#### 7. Brevo Daily Usage Banner
+**What:** A live usage indicator shown at the top of all three email pages. Fetches real-time data from `AccountApi.get_account()` (matches the Brevo dashboard exactly). Cached for 60 seconds with a manual `↺` refresh button.
+
+```
+📬 Brevo ● Healthy    ████░░░░░░░░░░░░░░░░  46/300    🟩 254 left    ✅ 43 delivered    ⚠️ 3 bounced
+```
+
+Color coding: 🟢 Healthy (0–66%), 🟡 Moderate (67–89%), 🔴 Critical (90–100%).
+
+**Note:** Brevo IP allowlisting must be **deactivated** in Brevo settings (`Settings → Authorized IPs → Deactivated`) since Streamlit Cloud uses dynamic IPs that change on every redeploy.
+
+---
+
+#### 8. Groq Free Tier Rate Limit — Known Behavior
+**Limit:** 500,000 tokens/day, resets at midnight UTC (5:30 AM IST).
+
+**Recovery:** Re-run the same ZIP after reset. Successfully processed resumes hit the reuse path (no AI call). Only failed ones are re-extracted.
 
 ---
 
@@ -151,9 +180,17 @@ resume_screening_automation/
 │       ├── recruiter_prompt.py        # System prompt for job config AI
 │       └── resume_extraction_prompt.py # System prompt for resume AI
 └── frontend/
-    ├── app.py                         # Streamlit UI
+    ├── app.py                         # Streamlit main app (Tabs 1–3)
     ├── api_client.py                  # HTTP client helpers
-    └── requirements.txt               # Frontend dependencies
+    ├── brevo_client.py                # Brevo API client + daily stats
+    ├── email_db_client.py             # email_logs table + helpers
+    ├── email_utils.py                 # Shared Brevo usage banner
+    ├── pyproject.toml                 # Python 3.11 lock for Streamlit Cloud
+    ├── requirements.txt               # Frontend dependencies
+    └── pages/
+        ├── 4_Shortlisting_Emails.py   # Shortlist/rejection email sender
+        ├── 5_Assignment_Emails.py     # Assignment email sender
+        └── 6_Email_Dashboard.py       # Email log + chart dashboard
 ```
 
 ---
@@ -201,19 +238,33 @@ Deduplicates uploaded resume files.
 ### `resume_results`
 Stores screening outcome for each resume × job pair.
 
-| Column           | Type      | Description                                  |
-|------------------|-----------|----------------------------------------------|
-| result_id        | Integer   | Primary key                                  |
-| run_id           | Integer   | FK → resume_runs                             |
-| resume_id        | Integer   | FK → resume_files                            |
-| job_id           | Integer   | FK → job_configs                             |
-| extracted_data   | JSON      | AI-extracted candidate info                  |
-| score            | Integer   | Final score (0–100)                          |
-| decision         | Text      | `shortlisted` or `rejected`                  |
-| decision_reason  | Text      | Human-readable scoring breakdown             |
-| ai_status        | Text      | `success`, `reused`, or error indicator      |
-| error_message    | Text      | Error details if processing failed           |
-| processed_at     | Timestamp | Auto-set on creation                         |
+| Column           | Type      | Description                                                        |
+|------------------|-----------|--------------------------------------------------------------------|
+| result_id        | Integer   | Primary key                                                        |
+| run_id           | Integer   | FK → resume_runs                                                   |
+| resume_id        | Integer   | FK → resume_files                                                  |
+| job_id           | Integer   | FK → job_configs                                                   |
+| extracted_data   | JSON      | AI-extracted candidate info (NULL if failed)                       |
+| score            | Integer   | Final score 0–100 (NULL if failed)                                 |
+| decision         | Text      | `shortlisted` or `rejected` (NULL if failed)                       |
+| decision_reason  | Text      | Human-readable scoring breakdown                                   |
+| ai_status        | Text      | `success`, `reused`, `failed`, or `rate_limited`                   |
+| error_message    | Text      | Error details if processing failed                                 |
+| processed_at     | Timestamp | Auto-set on creation                                               |
+
+### `email_logs`
+Tracks every email sent via Brevo. Prevents duplicate sends across runs.
+
+| Column      | Type      | Description                                          |
+|-------------|-----------|------------------------------------------------------|
+| log_id      | Integer   | Primary key                                          |
+| email       | Text      | Recipient email address                              |
+| template_id | Integer   | Brevo template ID (28=Shortlisted, 36=Rejected, 30=Assignment) |
+| full_name   | Text      | Recipient name                                       |
+| job_title   | Text      | Job title for template personalization               |
+| sent_at     | Timestamp | Auto-set on send                                     |
+
+Unique constraint on `(email, template_id)` — same email cannot receive the same template twice.
 
 ---
 
@@ -455,35 +506,47 @@ Key rules: no hallucination of names/emails/degrees, conservative domain inferen
 
 **`frontend/app.py`**
 
-A Streamlit app with session-based login and three tabs.
+Main Streamlit app with session-based login and three tabs. Three additional email pages are loaded automatically by Streamlit from the `pages/` directory and appear in the sidebar.
 
 #### Login Page
 - Username/password checked against `st.secrets["APP_USERNAME"]` and `st.secrets["APP_PASSWORD"]`
 - Session stored in `st.session_state.logged_in`
-- Company logo and branding displayed at the top
-- Login form centered on the page using a 3-column layout
+- All `pages/` files guard themselves with `if not st.session_state.get("logged_in"): st.stop()`
 
 #### Tab 1 — Resume Screening
 1. Loads all available jobs from the backend
-2. User selects a job from a dropdown
-3. User uploads a `.zip` file containing resumes
-4. On "Start Screening", posts to `/screening/start` with `job_id`, `batch_size=10`, and the zip file
-5. Displays `run_id` and a note that processing happens in the background (terminal logs show live progress)
+2. User selects a job and uploads a `.zip` file
+3. On "Start Screening", posts to `/screening/start` with `job_id`, `batch_size=10`, and the zip file
+4. Returns `run_id` immediately; processing continues in the background
 
 #### Tab 2 — Job Config Builder
-1. User enters a job title and pastes a job description
-2. "Generate Job Config via AI" calls `/jobs/ai-generate` and shows the result as editable JSON
-3. User reviews and edits the JSON if needed
-4. "Save Job Config" posts the final config to `/jobs`
+1. Create new or update existing job configs
+2. AI generation from pasted job description via `/jobs/ai-generate`
+3. Updating a job creates a new version and deactivates the old one
 
 #### Tab 3 — Results Dashboard
-1. User selects a job
-2. Results are fetched from `/screening/results/{job_id}` (cached 5 minutes via `@st.cache_data`)
-3. Filters: date range, decision (All / shortlisted / rejected), minimum score, sort order (ascending/descending)
-4. Summary metrics: Total candidates, Shortlisted count, Rejected count
-5. Full results table rendered with `st.dataframe`
-6. Download buttons: **Excel** (`.xlsx`) and **JSON**
-7. "Refresh Results" button clears cache and reruns the page
+1. Results fetched from `/screening/results/{job_id}` (5-minute cache)
+2. Filters: date range, decision, passed-out year, minimum score, sort order
+3. Summary metrics + full results table
+4. Download as Excel or JSON
+
+#### Page 4 — 📧 Shortlisting / Rejection Emails
+1. Upload reviewed Excel (columns: `full_name`, `email`, `decision`, `job_title`)
+2. Shows decision summary (Shortlisted / Rejected counts)
+3. "Send Emails" → sends via Brevo template (28=Shortlisted, 36=Rejected)
+4. Skips already-sent emails (checked against `email_logs`)
+5. Brevo daily usage banner at top with live count and `↺` refresh button
+
+#### Page 5 — 📝 Assignment Emails
+1. Upload Excel (columns: `full_name`, `email`, `job_title`)
+2. Sends Brevo template 30 with auto-calculated deadline (today + 10 days)
+3. Skips already-sent emails
+
+#### Page 6 — 📊 Email Dashboard
+1. Live Brevo daily usage banner (same as pages 4 & 5)
+2. Summary metrics: Total, Shortlisted, Rejected, Assignment counts
+3. Grouped bar chart — Shortlisted vs Rejected per date (Altair)
+4. Filterable log table with CSV export
 
 ---
 
@@ -591,7 +654,15 @@ APP_PASSWORD = "your_password"
 BACKEND_URL = "http://localhost:8000"
 API_KEY = "your_secret_api_key"
 COMPANY_LOGO = "https://your-logo-url.png"
+
+# Required for email pages (Brevo integration)
+BREVO_API_KEY = "your_brevo_api_key"
+BREVO_SENDER_EMAIL = "noreply@yourdomain.com"
+BREVO_SENDER_NAME = "Your Company"
+DATABASE_URL = "postgresql://user:password@host:5432/dbname"
 ```
+
+**Note:** `DATABASE_URL` in the frontend secrets is the same PostgreSQL database as the backend. It is used directly by the email pages to read/write `email_logs`. Brevo IP allowlisting must be set to **Deactivated** in Brevo settings — Streamlit Cloud uses dynamic IPs that change on every redeploy.
 
 ---
 
@@ -640,12 +711,16 @@ streamlit run app.py
 
 **Frontend (`requirements.txt`):**
 
-| Package   | Purpose                    |
-|-----------|----------------------------|
-| streamlit | UI framework               |
-| requests  | HTTP client                |
-| pandas    | Data manipulation          |
-| openpyxl  | Excel export               |
+| Package          | Purpose                                  |
+|------------------|------------------------------------------|
+| streamlit        | UI framework                             |
+| requests         | HTTP client                              |
+| pandas           | Data manipulation                        |
+| openpyxl         | Excel export                             |
+| brevo-python==1.2.0 | Brevo API client (email sending + stats) |
+| email-validator  | Validate recipient emails before sending |
+| sqlalchemy       | ORM for email_logs table                 |
+| psycopg2-binary  | PostgreSQL driver                        |
 
 ---
 
