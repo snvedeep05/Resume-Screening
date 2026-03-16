@@ -41,25 +41,41 @@ class BrevoClient:
             return False
 
     def get_daily_stats(self) -> dict:
-        # AccountApi — plan_info[0].credits gives remaining daily sends
+        remaining = 300
         try:
-            account_api = brevo_python.AccountApi(self.api_client)
-            account     = account_api.get_account()
-            remaining   = int(account.plan_info[0].credits or 300)
-            used        = max(300 - remaining, 0)
-        except Exception as e:
-            print(f"Failed to fetch Brevo account stats: {e}")
-            used      = 0
-            remaining = 300
+            account_api  = brevo_python.AccountApi(self.api_client)
+            account      = account_api.get_account()
+            plans        = account.plan or []
 
-        # SMTP stats for delivered/bounced (best-effort, may lag slightly)
+            print(f"[Brevo] Total plans returned: {len(plans)}")
+            for p in plans:
+                print(f"[Brevo] plan type={p.type} credits_type={p.credits_type} credits={p.credits}")
+
+            send_plan = next((p for p in plans if p.credits_type == "sendLimit"), None)
+            if send_plan:
+                remaining = int(send_plan.credits or 300)
+            else:
+                # fallback: first plan with any credits
+                first = next((p for p in plans if p.credits is not None), None)
+                if first:
+                    remaining = int(first.credits or 300)
+
+            print(f"[Brevo] remaining={remaining} used={max(300 - remaining, 0)}")
+
+        except Exception as e:
+            print(f"[Brevo] AccountApi failed: {e}")
+
+        used = max(300 - remaining, 0)
+
+        # SMTP stats for delivered/bounced
         today = datetime.today().strftime("%Y-%m-%d")
         try:
             report       = self.email_api.get_aggregated_smtp_report(start_date=today, end_date=today)
             delivered    = report.delivered    or 0
             hard_bounces = report.hard_bounces or 0
             soft_bounces = report.soft_bounces or 0
-        except Exception:
+        except Exception as e:
+            print(f"[Brevo] SMTP stats failed: {e}")
             delivered = hard_bounces = soft_bounces = 0
 
         return {
