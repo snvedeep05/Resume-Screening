@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+import altair as alt
 from email_db_client import get_session, get_all_logs
 from email_utils import show_brevo_usage
 
@@ -54,13 +55,21 @@ st.divider()
 # ── Bar chart — Shortlisted vs Rejected per date ──────────────────────────────
 st.markdown("### Emails Sent by Date")
 chart_df = df_logs[df_logs["email_type"].isin(["Shortlisted", "Rejected"])].copy()
-chart_df["date"] = chart_df["sent_at"].dt.date
-pivot = chart_df.groupby(["date", "email_type"]).size().unstack(fill_value=0)
-# ensure both columns exist even if one type has zero sends
-for col in ["Shortlisted", "Rejected"]:
-    if col not in pivot.columns:
-        pivot[col] = 0
-st.bar_chart(pivot[["Shortlisted", "Rejected"]])
+chart_df["date"] = chart_df["sent_at"].dt.strftime("%d %b %Y")
+grouped = chart_df.groupby(["date", "email_type"]).size().reset_index(name="Count")
+
+chart = alt.Chart(grouped).mark_bar().encode(
+    x=alt.X("email_type:N", title=None, axis=alt.Axis(labels=False, ticks=False)),
+    y=alt.Y("Count:Q", title="Count"),
+    color=alt.Color(
+        "email_type:N",
+        scale=alt.Scale(domain=["Shortlisted", "Rejected"], range=["#4f86f7", "#ef4444"]),
+        legend=alt.Legend(title="Type")
+    ),
+    column=alt.Column("date:N", title="Date", spacing=8)
+).properties(width=55, height=300)
+
+st.altair_chart(chart)
 
 st.divider()
 
