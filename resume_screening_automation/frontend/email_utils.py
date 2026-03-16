@@ -58,5 +58,3 @@ def show_brevo_usage():
     )
     st.markdown("<div style='margin-bottom:12px'></div>", unsafe_allow_html=True)
 
-    with st.expander("🔍 Debug: Brevo API raw response"):
-        st.code(stats.get("debug_plans", "N/A"))

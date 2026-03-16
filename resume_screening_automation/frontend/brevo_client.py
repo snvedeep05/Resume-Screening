@@ -41,27 +41,15 @@ class BrevoClient:
             return False
 
     def get_daily_stats(self) -> dict:
-        remaining  = 300
-        debug_info = "not called"
+        remaining = 300
         try:
             account_api = brevo_python.AccountApi(self.api_client)
             account     = account_api.get_account()
             plans       = account.plan or []
-            debug_info  = f"{len(plans)} plans: " + " | ".join(
-                f"type={p.type} credits_type={p.credits_type} credits={p.credits}"
-                for p in plans
-            )
-
-            send_plan = next((p for p in plans if p.credits_type == "sendLimit"), None)
+            send_plan   = next((p for p in plans if p.credits_type == "sendLimit" and p.type != "sms"), None)
             if send_plan:
                 remaining = int(send_plan.credits or 300)
-            else:
-                first = next((p for p in plans if p.credits is not None), None)
-                if first:
-                    remaining = int(first.credits or 300)
-
         except Exception as e:
-            debug_info = f"EXCEPTION: {e}"
             print(f"[Brevo] AccountApi failed: {e}")
 
         used = max(300 - remaining, 0)
@@ -82,5 +70,4 @@ class BrevoClient:
             "delivered":    delivered,
             "hard_bounces": hard_bounces,
             "soft_bounces": soft_bounces,
-            "debug_plans":  debug_info,
         }
