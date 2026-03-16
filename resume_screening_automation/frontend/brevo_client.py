@@ -41,22 +41,34 @@ class BrevoClient:
             return False
 
     def get_daily_stats(self) -> dict:
+        # AccountApi gives real-time plan usage matching the Brevo dashboard
+        try:
+            account_api = brevo_python.AccountApi(self.api_client)
+            account     = account_api.get_account()
+            remaining   = 300  # fallback
+            for plan in (account.plan or []):
+                if getattr(plan, "credits_type", None) == "sendLimit":
+                    remaining = int(plan.credits or 300)
+                    break
+            used = max(300 - remaining, 0)
+        except Exception as e:
+            print(f"Failed to fetch Brevo account stats: {e}")
+            used      = 0
+            remaining = 300
+
+        # SMTP stats for delivered/bounced (best-effort, may lag slightly)
         today = datetime.today().strftime("%Y-%m-%d")
         try:
-            report = self.email_api.get_aggregated_smtp_report(
-                start_date=today,
-                end_date=today
-            )
-            return {
-                "requests":     report.requests     or 0,
-                "delivered":    report.delivered    or 0,
-                "hard_bounces": report.hard_bounces or 0,
-                "soft_bounces": report.soft_bounces or 0,
-                "blocked":      report.blocked      or 0,
-            }
-        except Exception as e:
-            print(f"Failed to fetch Brevo daily stats: {e}")
-            return {
-                "requests": 0, "delivered": 0,
-                "hard_bounces": 0, "soft_bounces": 0, "blocked": 0
-            }
+            report     = self.email_api.get_aggregated_smtp_report(start_date=today, end_date=today)
+            delivered  = report.delivered    or 0
+            hard_bounces = report.hard_bounces or 0
+            soft_bounces = report.soft_bounces or 0
+        except Exception:
+            delivered = hard_bounces = soft_bounces = 0
+
+        return {
+            "requests":     used,
+            "delivered":    delivered,
+            "hard_bounces": hard_bounces,
+            "soft_bounces": soft_bounces,
+        }
