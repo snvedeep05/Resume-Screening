@@ -2,3 +2,5 @@ streamlit
 requests
 pandas
 openpyxl
+brevo-python
+email-validator
