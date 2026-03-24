@@ -98,6 +98,104 @@ Color coding: 🟢 Healthy (0–66%), 🟡 Moderate (67–89%), 🔴 Critical (9
 
 ---
 
+#### 9. `update_job` — Atomic Transaction Fix
+**Why:** The previous implementation used two separate `db.commit()` calls — one to deactivate the old job config, another to create the new one. If the server crashed or threw an exception between the two commits, the old job was permanently deactivated with no replacement, silently disappearing from the job dropdown.
+
+**Fix:** Merged both operations into a single atomic transaction in `backend/api/jobs.py`:
+```python
+old_job.is_active = False
+new_job = JobConfig(...)
+db.add(new_job)
+try:
+    db.commit()       # single commit — both changes or neither
+except Exception:
+    db.rollback()
+    raise HTTPException(status_code=500, detail="Failed to update job config")
+```
+
+---
+
+#### 10. HTTP Timeouts Added to All Frontend Requests
+**Why:** Render's free tier takes ~30 seconds to wake from spindown. Without a timeout, the Streamlit frontend would hang indefinitely with no feedback whenever the backend was cold-starting.
+
+**Fix:** Added `timeout=30` to every `requests.get`, `requests.post`, and `requests.patch` call in `frontend/api_client.py` and the inline POST in `frontend/app.py`. After 30 seconds with no response, a clean error is shown instead of an infinite hang.
+
+---
+
+#### 11. Results Dashboard — `passed_out_year` Crash Fixed
+**Why:** `df["passed_out_year"].astype("Int64")` raised a `ValueError` and crashed the entire Results Dashboard tab if any resume had a non-numeric year value (e.g. AI returned `"N/A"` or `"Present"`).
+
+**Fix:** Added `pd.to_numeric(..., errors="coerce")` before the cast:
+```python
+df["passed_out_year"] = pd.to_numeric(
+    df["passed_out_year"], errors="coerce"
+).astype("Int64")
+```
+Non-numeric values are silently coerced to `NaN`. The row stays in the results table; the year column shows `<NA>` for those entries.
+
+---
+
+#### 12. Contradictory Emails Blocked — Shortlist + Rejection to Same Candidate
+**Why:** The existing duplicate check used `UniqueConstraint("email", "template_id")`. Since shortlist (template 28) and rejection (template 36) have different IDs, a candidate could receive both emails across separate send sessions — a serious recruitment mistake.
+
+**Fix:** Added `has_conflicting_email()` to `frontend/email_db_client.py`. Before sending any email, Page 4 now checks whether the opposing template was already sent to that address:
+```python
+if has_conflicting_email(db, email, conflict_id):
+    skipped_list.append(f"{name} — {email} (⚠️ conflicting email already sent)")
+    continue
+```
+
+---
+
+#### 13. Live Run Progress — `GET /screening/runs/{run_id}`
+**Why:** After clicking "Start Screening", users had no visibility into whether the run was progressing, stuck, or done — until manually checking the Results Dashboard.
+
+**Fix:** Two parts added:
+
+**Backend** — new endpoint in `backend/api/screening.py`:
+
+| Method | Path | Description |
+|---|---|---|
+| GET | `/screening/runs/{run_id}` | Returns run status, processed count, failed count, and timestamps |
+
+**Frontend** — `frontend/app.py` Tab 1 now stores the `run_id` in session state and shows a `@st.fragment(run_every=30)` progress block:
+```
+[████████░░░░░░░░░░░░]
+⏳ Run 42 — 24 / 80 processed · 2 failed
+```
+Polls every **30 seconds** — enough granularity for a batch process without unnecessary backend calls. Auto-stops and shows a success/error message when the run completes or crashes.
+
+---
+
+#### 14. Results Endpoint Paginated
+**Why:** `GET /screening/results/{job_id}` returned all results across all runs for a job with no limit. As runs accumulate, this query grows unboundedly — causing slow responses and potential timeouts on Render free tier.
+
+**Fix:** Added `limit` and `offset` query parameters (default: `limit=500`, `offset=0`):
+```python
+@router.get("/results/{job_id}")
+def get_results(job_id: int, limit: int = 500, offset: int = 0):
+    results = db.query(...).order_by(...).offset(offset).limit(limit).all()
+```
+The frontend passes these params in `fetch_all_results()`. All existing client-side filtering (date, decision, year, score) works on the fetched dataset. Default of 500 covers all realistic single-job result sets.
+
+---
+
+#### 15. Sent Emails — Downloadable Excel After Send
+**What:** After clicking Send on Page 4 (Shortlisting) or Page 5 (Assignment), a download button now appears for an Excel file of successfully sent emails only — same columns as the uploaded file.
+
+- **Page 4 columns:** `full_name`, `email`, `decision`, `job_title`
+- **Page 5 columns:** `full_name`, `email`, `job_title`
+- **Filename format:** `sent_{original_filename}_{YYYY-MM-DD_HH-MM-SS}.xlsx`
+
+Skipped, failed, already-sent, and conflicting rows are excluded. Button only appears if at least one email was sent.
+
+---
+
+#### 16. Backend `requirements.txt` Cleaned Up
+Removed unused packages (`streamlit`, `PyPDF2`, `openpyxl`) and added `email-validator` which was already in use for resume email normalization but missing from the dependency list. Deleted dev-only scripts `test_db.py` and `test_models.py` (not part of application runtime).
+
+---
+
 ## Table of Contents
 
 - [Overview](#overview)
@@ -339,7 +437,8 @@ Returns the AI-generated `job_config` JSON.
 | Method | Path                            | Description                               |
 |--------|---------------------------------|-------------------------------------------|
 | POST   | `/screening/start`              | Upload ZIP of resumes and start screening |
-| GET    | `/screening/results/{job_id}`   | Get all screening results for a job       |
+| GET    | `/screening/runs/{run_id}`      | Get live status of a screening run        |
+| GET    | `/screening/results/{job_id}`   | Get screening results for a job (paginated, default limit=500) |
 
 **Helper: `get_or_create_resume(db, resume_path)`**
 
@@ -814,13 +913,9 @@ The batch size is hardcoded to `10` in the frontend POST request (`"batch_size":
 
 ---
 
-### 8. No pagination on results endpoint
+### 8. ~~No pagination on results endpoint~~ ✅ Resolved
 
-**Location:** `backend/api/screening.py` → `get_results()`
-
-`GET /screening/results/{job_id}` returns all results for a job in a single response with no limit or offset. For large candidate pools this can produce very large payloads.
-
-**Suggested fix:** Add `limit` and `offset` query parameters to the endpoint and apply `.limit().offset()` on the SQLAlchemy query.
+`GET /screening/results/{job_id}` now accepts `limit` (default 500) and `offset` (default 0) query parameters. The SQLAlchemy query applies `.offset(offset).limit(limit)` before fetching. Frontend passes these params in `fetch_all_results()`.
 
 ---
 
