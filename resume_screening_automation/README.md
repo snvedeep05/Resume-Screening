@@ -8,142 +8,32 @@ An AI-powered resume screening system that automatically extracts, scores, and r
 
 ### March 2026
 
-#### 1. `/health` Endpoint Added — UptimeRobot Support
-**Why:** Render's free tier spins down any web service after **15 minutes of no incoming HTTP requests**. Background processing tasks (resume screening) do not count as activity — so the server was shutting down mid-run on large batches.
+#### 16. Backend `requirements.txt` Cleaned Up
+Removed unused packages (`streamlit`, `PyPDF2`, `openpyxl`) and added `email-validator` which was already in use for resume email normalization but missing from the dependency list. Deleted dev-only scripts `test_db.py` and `test_models.py` (not part of application runtime).
 
-**Fix:** Added a public `/health` endpoint in `backend/main.py`. Registered as two separate decorators so GET and HEAD have distinct OpenAPI operation IDs (avoids Swagger duplicate operation ID warning):
+---
 
+#### 15. Sent Emails — Downloadable Excel After Send
+**What:** After clicking Send on Page 4 (Shortlisting) or Page 5 (Assignment), a download button now appears for an Excel file of successfully sent emails only — same columns as the uploaded file.
+
+- **Page 4 columns:** `full_name`, `email`, `decision`, `job_title`
+- **Page 5 columns:** `full_name`, `email`, `job_title`
+- **Filename format:** `sent_{original_filename}_{YYYY-MM-DD_HH-MM-SS}.xlsx`
+
+Skipped, failed, already-sent, and conflicting rows are excluded. Button only appears if at least one email was sent.
+
+---
+
+#### 14. Results Endpoint Paginated
+**Why:** `GET /screening/results/{job_id}` returned all results across all runs for a job with no limit. As runs accumulate, this query grows unboundedly — causing slow responses and potential timeouts on Render free tier.
+
+**Fix:** Added `limit` and `offset` query parameters (default: `limit=500`, `offset=0`):
 ```python
-@app.get("/health")
-def health():
-    return {"status": "ok"}
-
-@app.head("/health", include_in_schema=False)
-def health_head():
-    pass
+@router.get("/results/{job_id}")
+def get_results(job_id: int, limit: int = 500, offset: int = 0):
+    results = db.query(...).order_by(...).offset(offset).limit(limit).all()
 ```
-
-**UptimeRobot setup:** A monitor is configured to ping `{BACKEND_URL}/health` every **5 minutes**, keeping the Render server alive throughout batch runs.
-
----
-
-#### 2. pdfminer FontBBox Warnings Suppressed
-**Why:** Render logs were flooded with repeated harmless warnings from `pdfminer`. Text extraction is unaffected.
-
-**Fix:** Added at the top of `backend/services/resume_processor.py`:
-```python
-logging.getLogger("pdfminer").setLevel(logging.ERROR)
-```
-
----
-
-#### 3. Re-run Bug Fixed — Failed Resumes Now Re-extracted on Retry
-**Fix:** Changed the reuse query to filter `extracted_data IS NOT NULL` so failed rows are not treated as valid cached results:
-```python
-existing_result = db.query(ResumeResult).filter(
-    ResumeResult.resume_id == resume_id,
-    ResumeResult.job_id == job_id,
-    ResumeResult.extracted_data.isnot(None)
-).first()
-```
-
----
-
-#### 4. `failed_count` Not Persisting After Rollback — Fixed
-**Why:** `run.failed_count += 1` was called before `db.rollback()` in both except handlers. After rollback, SQLAlchemy expires all session objects — discarding the in-memory increment. `failed_count` in the DB never actually updated for failed/rate-limited resumes.
-
-**Fix:** Moved `run.failed_count += 1` to after `db.rollback()` in both handlers so SQLAlchemy re-loads the fresh DB value before incrementing.
-
----
-
-#### 5. Groq Rate Limit — Early Exit Added
-**Why:** Once Groq's daily token limit is hit, every subsequent API call in the same run also fails — wasting time attempting calls that will all error. Old resumes (already extracted) were being incorrectly marked as `rate_limited` instead of being reused.
-
-**Fix:** Added a `rate_limit_hit` flag. On first `RateLimitError`:
-- All subsequent **new** resumes are marked `rate_limited` immediately (no API call)
-- All subsequent **old** resumes (with existing `extracted_data`) are still reused normally — Groq is not called for them regardless
-
----
-
-#### 6. Email Automation Integrated via Streamlit Multipage
-**What:** Brevo Email Automation merged into the Resume Screening app using Streamlit's `pages/` directory. No changes to `app.py`. Three new pages added:
-
-| Page | File | Description |
-|---|---|---|
-| 📧 Shortlisting Emails | `pages/4_Shortlisting_Emails.py` | Send shortlist/rejection emails via Brevo |
-| 📝 Assignment Emails | `pages/5_Assignment_Emails.py` | Send assignment emails to interested candidates |
-| 📊 Email Dashboard | `pages/6_Email_Dashboard.py` | Email log, metrics, grouped bar chart by date |
-
-All pages are login-guarded via `st.session_state.get("logged_in")`.
-
----
-
-#### 7. Brevo Daily Usage Banner
-**What:** A live usage indicator shown at the top of all three email pages. Fetches real-time data from `AccountApi.get_account()` (matches the Brevo dashboard exactly). Cached for 60 seconds with a manual `↺` refresh button.
-
-```
-📬 Brevo ● Healthy    ████░░░░░░░░░░░░░░░░  46/300    🟩 254 left    ✅ 43 delivered    ⚠️ 3 bounced
-```
-
-Color coding: 🟢 Healthy (0–66%), 🟡 Moderate (67–89%), 🔴 Critical (90–100%).
-
-**Note:** Brevo IP allowlisting must be **deactivated** in Brevo settings (`Settings → Authorized IPs → Deactivated`) since Streamlit Cloud uses dynamic IPs that change on every redeploy.
-
----
-
-#### 8. Groq Free Tier Rate Limit — Known Behavior
-**Limit:** 500,000 tokens/day, resets at midnight UTC (5:30 AM IST).
-
-**Recovery:** Re-run the same ZIP after reset. Successfully processed resumes hit the reuse path (no AI call). Only failed ones are re-extracted.
-
----
-
-#### 9. `update_job` — Atomic Transaction Fix
-**Why:** The previous implementation used two separate `db.commit()` calls — one to deactivate the old job config, another to create the new one. If the server crashed or threw an exception between the two commits, the old job was permanently deactivated with no replacement, silently disappearing from the job dropdown.
-
-**Fix:** Merged both operations into a single atomic transaction in `backend/api/jobs.py`:
-```python
-old_job.is_active = False
-new_job = JobConfig(...)
-db.add(new_job)
-try:
-    db.commit()       # single commit — both changes or neither
-except Exception:
-    db.rollback()
-    raise HTTPException(status_code=500, detail="Failed to update job config")
-```
-
----
-
-#### 10. HTTP Timeouts Added to All Frontend Requests
-**Why:** Render's free tier takes ~30 seconds to wake from spindown. Without a timeout, the Streamlit frontend would hang indefinitely with no feedback whenever the backend was cold-starting.
-
-**Fix:** Added `timeout=30` to every `requests.get`, `requests.post`, and `requests.patch` call in `frontend/api_client.py` and the inline POST in `frontend/app.py`. After 30 seconds with no response, a clean error is shown instead of an infinite hang.
-
----
-
-#### 11. Results Dashboard — `passed_out_year` Crash Fixed
-**Why:** `df["passed_out_year"].astype("Int64")` raised a `ValueError` and crashed the entire Results Dashboard tab if any resume had a non-numeric year value (e.g. AI returned `"N/A"` or `"Present"`).
-
-**Fix:** Added `pd.to_numeric(..., errors="coerce")` before the cast:
-```python
-df["passed_out_year"] = pd.to_numeric(
-    df["passed_out_year"], errors="coerce"
-).astype("Int64")
-```
-Non-numeric values are silently coerced to `NaN`. The row stays in the results table; the year column shows `<NA>` for those entries.
-
----
-
-#### 12. Contradictory Emails Blocked — Shortlist + Rejection to Same Candidate
-**Why:** The existing duplicate check used `UniqueConstraint("email", "template_id")`. Since shortlist (template 28) and rejection (template 36) have different IDs, a candidate could receive both emails across separate send sessions — a serious recruitment mistake.
-
-**Fix:** Added `has_conflicting_email()` to `frontend/email_db_client.py`. Before sending any email, Page 4 now checks whether the opposing template was already sent to that address:
-```python
-if has_conflicting_email(db, email, conflict_id):
-    skipped_list.append(f"{name} — {email} (⚠️ conflicting email already sent)")
-    continue
-```
+The frontend passes these params in `fetch_all_results()`. All existing client-side filtering (date, decision, year, score) works on the fetched dataset. Default of 500 covers all realistic single-job result sets.
 
 ---
 
@@ -167,32 +57,142 @@ Polls every **30 seconds** — enough granularity for a batch process without un
 
 ---
 
-#### 14. Results Endpoint Paginated
-**Why:** `GET /screening/results/{job_id}` returned all results across all runs for a job with no limit. As runs accumulate, this query grows unboundedly — causing slow responses and potential timeouts on Render free tier.
+#### 12. Contradictory Emails Blocked — Shortlist + Rejection to Same Candidate
+**Why:** The existing duplicate check used `UniqueConstraint("email", "template_id")`. Since shortlist (template 28) and rejection (template 36) have different IDs, a candidate could receive both emails across separate send sessions — a serious recruitment mistake.
 
-**Fix:** Added `limit` and `offset` query parameters (default: `limit=500`, `offset=0`):
+**Fix:** Added `has_conflicting_email()` to `frontend/email_db_client.py`. Before sending any email, Page 4 now checks whether the opposing template was already sent to that address:
 ```python
-@router.get("/results/{job_id}")
-def get_results(job_id: int, limit: int = 500, offset: int = 0):
-    results = db.query(...).order_by(...).offset(offset).limit(limit).all()
+if has_conflicting_email(db, email, conflict_id):
+    skipped_list.append(f"{name} — {email} (⚠️ conflicting email already sent)")
+    continue
 ```
-The frontend passes these params in `fetch_all_results()`. All existing client-side filtering (date, decision, year, score) works on the fetched dataset. Default of 500 covers all realistic single-job result sets.
 
 ---
 
-#### 15. Sent Emails — Downloadable Excel After Send
-**What:** After clicking Send on Page 4 (Shortlisting) or Page 5 (Assignment), a download button now appears for an Excel file of successfully sent emails only — same columns as the uploaded file.
+#### 11. Results Dashboard — `passed_out_year` Crash Fixed
+**Why:** `df["passed_out_year"].astype("Int64")` raised a `ValueError` and crashed the entire Results Dashboard tab if any resume had a non-numeric year value (e.g. AI returned `"N/A"` or `"Present"`).
 
-- **Page 4 columns:** `full_name`, `email`, `decision`, `job_title`
-- **Page 5 columns:** `full_name`, `email`, `job_title`
-- **Filename format:** `sent_{original_filename}_{YYYY-MM-DD_HH-MM-SS}.xlsx`
-
-Skipped, failed, already-sent, and conflicting rows are excluded. Button only appears if at least one email was sent.
+**Fix:** Added `pd.to_numeric(..., errors="coerce")` before the cast:
+```python
+df["passed_out_year"] = pd.to_numeric(
+    df["passed_out_year"], errors="coerce"
+).astype("Int64")
+```
+Non-numeric values are silently coerced to `NaN`. The row stays in the results table; the year column shows `<NA>` for those entries.
 
 ---
 
-#### 16. Backend `requirements.txt` Cleaned Up
-Removed unused packages (`streamlit`, `PyPDF2`, `openpyxl`) and added `email-validator` which was already in use for resume email normalization but missing from the dependency list. Deleted dev-only scripts `test_db.py` and `test_models.py` (not part of application runtime).
+#### 10. HTTP Timeouts Added to All Frontend Requests
+**Why:** Render's free tier takes ~30 seconds to wake from spindown. Without a timeout, the Streamlit frontend would hang indefinitely with no feedback whenever the backend was cold-starting.
+
+**Fix:** Added `timeout=30` to every `requests.get`, `requests.post`, and `requests.patch` call in `frontend/api_client.py` and the inline POST in `frontend/app.py`. After 30 seconds with no response, a clean error is shown instead of an infinite hang.
+
+---
+
+#### 9. `update_job` — Atomic Transaction Fix
+**Why:** The previous implementation used two separate `db.commit()` calls — one to deactivate the old job config, another to create the new one. If the server crashed or threw an exception between the two commits, the old job was permanently deactivated with no replacement, silently disappearing from the job dropdown.
+
+**Fix:** Merged both operations into a single atomic transaction in `backend/api/jobs.py`:
+```python
+old_job.is_active = False
+new_job = JobConfig(...)
+db.add(new_job)
+try:
+    db.commit()       # single commit — both changes or neither
+except Exception:
+    db.rollback()
+    raise HTTPException(status_code=500, detail="Failed to update job config")
+```
+
+---
+
+#### 8. Groq Free Tier Rate Limit — Known Behavior
+**Limit:** 500,000 tokens/day, resets at midnight UTC (5:30 AM IST).
+
+**Recovery:** Re-run the same ZIP after reset. Successfully processed resumes hit the reuse path (no AI call). Only failed ones are re-extracted.
+
+---
+
+#### 7. Brevo Daily Usage Banner
+**What:** A live usage indicator shown at the top of all three email pages. Fetches real-time data from `AccountApi.get_account()` (matches the Brevo dashboard exactly). Cached for 60 seconds with a manual `↺` refresh button.
+
+```
+📬 Brevo ● Healthy    ████░░░░░░░░░░░░░░░░  46/300    🟩 254 left    ✅ 43 delivered    ⚠️ 3 bounced
+```
+
+Color coding: 🟢 Healthy (0–66%), 🟡 Moderate (67–89%), 🔴 Critical (90–100%).
+
+**Note:** Brevo IP allowlisting must be **deactivated** in Brevo settings (`Settings → Authorized IPs → Deactivated`) since Streamlit Cloud uses dynamic IPs that change on every redeploy.
+
+---
+
+#### 6. Email Automation Integrated via Streamlit Multipage
+**What:** Brevo Email Automation merged into the Resume Screening app using Streamlit's `pages/` directory. No changes to `app.py`. Three new pages added:
+
+| Page | File | Description |
+|---|---|---|
+| 📧 Shortlisting Emails | `pages/4_Shortlisting_Emails.py` | Send shortlist/rejection emails via Brevo |
+| 📝 Assignment Emails | `pages/5_Assignment_Emails.py` | Send assignment emails to interested candidates |
+| 📊 Email Dashboard | `pages/6_Email_Dashboard.py` | Email log, metrics, grouped bar chart by date |
+
+All pages are login-guarded via `st.session_state.get("logged_in")`.
+
+---
+
+#### 5. Groq Rate Limit — Early Exit Added
+**Why:** Once Groq's daily token limit is hit, every subsequent API call in the same run also fails — wasting time attempting calls that will all error. Old resumes (already extracted) were being incorrectly marked as `rate_limited` instead of being reused.
+
+**Fix:** Added a `rate_limit_hit` flag. On first `RateLimitError`:
+- All subsequent **new** resumes are marked `rate_limited` immediately (no API call)
+- All subsequent **old** resumes (with existing `extracted_data`) are still reused normally — Groq is not called for them regardless
+
+---
+
+#### 4. `failed_count` Not Persisting After Rollback — Fixed
+**Why:** `run.failed_count += 1` was called before `db.rollback()` in both except handlers. After rollback, SQLAlchemy expires all session objects — discarding the in-memory increment. `failed_count` in the DB never actually updated for failed/rate-limited resumes.
+
+**Fix:** Moved `run.failed_count += 1` to after `db.rollback()` in both handlers so SQLAlchemy re-loads the fresh DB value before incrementing.
+
+---
+
+#### 3. Re-run Bug Fixed — Failed Resumes Now Re-extracted on Retry
+**Fix:** Changed the reuse query to filter `extracted_data IS NOT NULL` so failed rows are not treated as valid cached results:
+```python
+existing_result = db.query(ResumeResult).filter(
+    ResumeResult.resume_id == resume_id,
+    ResumeResult.job_id == job_id,
+    ResumeResult.extracted_data.isnot(None)
+).first()
+```
+
+---
+
+#### 2. pdfminer FontBBox Warnings Suppressed
+**Why:** Render logs were flooded with repeated harmless warnings from `pdfminer`. Text extraction is unaffected.
+
+**Fix:** Added at the top of `backend/services/resume_processor.py`:
+```python
+logging.getLogger("pdfminer").setLevel(logging.ERROR)
+```
+
+---
+
+#### 1. `/health` Endpoint Added — UptimeRobot Support
+**Why:** Render's free tier spins down any web service after **15 minutes of no incoming HTTP requests**. Background processing tasks (resume screening) do not count as activity — so the server was shutting down mid-run on large batches.
+
+**Fix:** Added a public `/health` endpoint in `backend/main.py`. Registered as two separate decorators so GET and HEAD have distinct OpenAPI operation IDs (avoids Swagger duplicate operation ID warning):
+
+```python
+@app.get("/health")
+def health():
+    return {"status": "ok"}
+
+@app.head("/health", include_in_schema=False)
+def health_head():
+    pass
+```
+
+**UptimeRobot setup:** A monitor is configured to ping `{BACKEND_URL}/health` every **5 minutes**, keeping the Render server alive throughout batch runs.
 
 ---
 
