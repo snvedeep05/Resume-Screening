@@ -38,6 +38,14 @@ def is_already_sent(db, email: str, template_id: int) -> bool:
     ).first() is not None
 
 
+def has_conflicting_email(db, email: str, conflicting_template_id: int) -> bool:
+    """Check if the opposing decision email was already sent to this address."""
+    return db.query(EmailLog).filter_by(
+        email=email,
+        template_id=conflicting_template_id
+    ).first() is not None
+
+
 def log_email_sent(db, email: str, template_id: int, full_name: str = None, job_title: str = None):
     db.add(EmailLog(email=email, template_id=template_id, full_name=full_name, job_title=job_title))
     db.commit()

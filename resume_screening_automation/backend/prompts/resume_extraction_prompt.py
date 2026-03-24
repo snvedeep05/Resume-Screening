@@ -9,7 +9,7 @@ The JSON must STRICTLY follow this schema and MUST include ALL keys.
 {
   "personal_details": {
     "full_name": string,
-    "email": string,
+    "email": string | null,
     "phone": string | null
   },
 
@@ -44,7 +44,7 @@ RULES:
 - Do NOT rename keys
 - Use empty lists if information is missing
 - Use null for phone if not found
-- Extract email ONLY if explicitly present
+- Use null for email if not explicitly present in the resume — do NOT guess or fabricate
 - Do NOT hallucinate names, emails, degrees, or companies
 - Infer project domains conservatively (e.g. "web", "backend", "ai", "ml")
 - "passed_out_year" (top-level) is the year the candidate completed or is expected to complete their most recent degree (B.Tech or equivalent). Extract from graduation year, passing year, or expected graduation year mentioned in the resume. Use null if not found.

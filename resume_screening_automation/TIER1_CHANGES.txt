@@ -1,0 +1,255 @@
+================================================================================
+TIER 1 FIXES — RESUME SCREENING AUTOMATION
+Date: 2026-03-24
+================================================================================
+
+This file documents what existed BEFORE each fix and exactly what was changed.
+Use this to understand why a change was made and what the old behavior was.
+
+--------------------------------------------------------------------------------
+FIX 1 — N2: Transaction Split in update_job
+FILE: backend/api/jobs.py  (function: update_job)
+--------------------------------------------------------------------------------
+
+PROBLEM:
+  update_job() used TWO separate db.commit() calls:
+    1. Deactivate old job  → db.commit()
+    2. Create new job      → db.commit()
+  If the server crashed or threw an exception between the two commits,
+  the old job would be permanently deactivated with no new job created.
+  That job title would silently disappear from the dropdown with no recovery
+  path short of direct database access.
+
+BEFORE (lines 70-83):
+  old_job.is_active = False
+  db.commit()                    ← FIRST commit — point of no return
+
+  new_job = JobConfig(...)
+  db.add(new_job)
+  db.commit()                    ← SECOND commit — could fail after first
+
+AFTER:
+  old_job.is_active = False
+  new_job = JobConfig(...)
+  db.add(new_job)
+  try:
+      db.commit()                ← single atomic commit for both changes
+  except Exception:
+      db.rollback()
+      raise HTTPException(500, "Failed to update job config")
+  db.refresh(new_job)
+
+IMPACT: update_job is now atomic — either both changes commit or neither does.
+
+--------------------------------------------------------------------------------
+FIX 2 — N3: No HTTP Timeouts on Frontend Requests
+FILES: frontend/api_client.py, frontend/app.py
+--------------------------------------------------------------------------------
+
+PROBLEM:
+  All requests.get / requests.post / requests.patch calls had NO timeout.
+  Render free tier takes ~30 seconds to wake from spindown. During that
+  window, the Streamlit frontend would hang indefinitely with a blank spinner
+  and zero feedback to the user.
+
+BEFORE:
+  requests.post(url, json=..., headers=...)          ← no timeout
+  requests.get(url, headers=...)                     ← no timeout
+  requests.patch(url, json=..., headers=...)         ← no timeout
+
+AFTER:
+  requests.post(url, json=..., headers=..., timeout=30)
+  requests.get(url, headers=..., timeout=30)
+  requests.patch(url, json=..., headers=..., timeout=30)
+
+  Also added timeout=30 to:
+  - The inline requests.post in app.py (Tab 1 screening start)
+  - fetch_all_results() in app.py (Tab 3 results fetch)
+
+IMPACT: After 30 seconds with no response, a clean exception is raised and
+  shown as st.error() instead of the UI hanging forever.
+
+--------------------------------------------------------------------------------
+FIX 3 — N4: Dashboard Crash on Non-Numeric passed_out_year
+FILE: frontend/app.py  (Tab 3: Results Dashboard, line ~428)
+--------------------------------------------------------------------------------
+
+PROBLEM:
+  df["passed_out_year"].astype("Int64") crashes with a ValueError if any
+  resume in the results has a non-numeric passed_out_year value (e.g., "N/A",
+  "Present", or a malformed AI extraction). This crashes the entire Results
+  Dashboard tab — you'd see an unhandled exception and none of the filters
+  or results table would render.
+
+BEFORE:
+  df["passed_out_year"] = df["passed_out_year"].astype("Int64")
+
+AFTER:
+  df["passed_out_year"] = pd.to_numeric(
+      df["passed_out_year"], errors="coerce"
+  ).astype("Int64")
+
+  pd.to_numeric(..., errors="coerce") converts non-numeric values to NaN
+  silently before the Int64 cast. The row stays in the table; the year
+  column just shows <NA> for those entries.
+
+IMPACT: Dashboard never crashes on bad year data. Rows with unparseable
+  years are kept and displayed with a blank year cell.
+
+--------------------------------------------------------------------------------
+FIX 4 — N5: Contradictory Emails (Shortlisted + Rejected to Same Candidate)
+FILES: frontend/email_db_client.py, frontend/pages/4_Shortlisting_Emails.py
+--------------------------------------------------------------------------------
+
+PROBLEM:
+  The existing duplicate check used UniqueConstraint("email", "template_id").
+  This means (jane@example.com, template=28) and (jane@example.com, template=36)
+  are treated as two separate, independent records.
+
+  A candidate could receive BOTH a shortlist email (template 28) AND a rejection
+  email (template 36) if:
+    - They were shortlisted in run 1 → shortlist email sent
+    - A revised Excel was uploaded for run 2 marking them as rejected
+    - The rejection email was NOT blocked (different template_id → no duplicate)
+
+  Sending both emails to a candidate is a serious recruitment mistake.
+
+BEFORE (email_db_client.py):
+  Only is_already_sent(db, email, template_id) was available.
+  No way to check if the opposing template was sent.
+
+BEFORE (4_Shortlisting_Emails.py):
+  if is_already_sent(db, email, template_id):
+      already_sent_list.append(...)
+      continue
+  # No check for conflicting template
+
+AFTER (email_db_client.py):
+  Added new helper:
+  def has_conflicting_email(db, email, conflicting_template_id) -> bool
+    Checks if the opposing template was already sent to this email.
+
+AFTER (4_Shortlisting_Emails.py):
+  Set conflict_id = TEMPLATE_REJECTED if shortlisted, else TEMPLATE_SHORTLISTED.
+  Added check BEFORE sending:
+  if has_conflicting_email(db, email, conflict_id):
+      skipped_list.append(f"{name} — {email} (conflicting email already sent)")
+      continue
+
+IMPACT: A candidate who already received a shortlist email can never
+  receive a rejection email, and vice versa. Prevents the most damaging
+  possible mistake in a recruitment email workflow.
+
+--------------------------------------------------------------------------------
+FIX 5 — N12: No Progress Visibility After "Start Screening"
+FILES: backend/api/screening.py, frontend/api_client.py, frontend/app.py
+--------------------------------------------------------------------------------
+
+PROBLEM:
+  After clicking "Start Screening", the UI showed a static message:
+    "Resumes are now being processed in the background."
+  With 100+ resumes, the user had no way to know if the run was still
+  going, stuck, rate-limited, or done — until they manually switched to
+  Tab 3 and refreshed results.
+
+BEFORE (app.py Tab 1):
+  st.success("Screening started successfully ✅")
+  st.markdown("... Resumes are now being processed in the background.")
+  # nothing more — user is completely in the dark
+
+AFTER:
+  Three parts added:
+
+  1. backend/api/screening.py — New endpoint:
+     GET /screening/runs/{run_id}
+     Returns: { run_id, status, total_resumes, processed_count,
+                failed_count, started_at, ended_at }
+     Simple DB read on resume_runs table. Lightweight — no joins.
+
+  2. frontend/api_client.py — New function:
+     get_run_status(run_id) → calls GET /screening/runs/{run_id}
+
+  3. frontend/app.py — After successful screening start:
+     - Stores run_id in st.session_state.current_run_id
+     - Defines a @st.fragment(run_every=30) block that:
+         * Fetches run status every 30 seconds
+         * Shows st.progress(processed / total)
+         * Shows caption: "X / Y processed · Z failed"
+         * On "completed": shows success, clears current_run_id, stops polling
+         * On "crashed": shows error, clears current_run_id, stops polling
+
+  WHY 30 SECONDS:
+     Groq processes roughly 1 resume every 3-5 seconds.
+     Polling every 30s = ~6-10 resumes per update. Enough granularity
+     to know it's progressing without unnecessary backend calls.
+     st.fragment reruns only the progress block — not the entire page.
+
+IMPACT: User can see live progress without leaving Tab 1. Fragment-based
+  polling means no full page rerenders; only the progress bar updates.
+  Polling auto-stops when run completes or crashes.
+
+--------------------------------------------------------------------------------
+FIX 6 — R5: No Pagination on Results Endpoint
+FILES: backend/api/screening.py, frontend/app.py
+--------------------------------------------------------------------------------
+
+PROBLEM:
+  GET /screening/results/{job_id} returned ALL results for a job with no
+  limit. As more screening runs happen against the same job, this query
+  grows unboundedly. On Render free tier with limited RAM and a slow DB
+  connection, large result sets would cause slow responses or timeouts.
+
+  Example: 5 runs × 100 resumes = 500 rows returned in one shot, every
+  time the Results Dashboard loads (even with a 5-min cache, first load
+  after cache expiry hits the full query).
+
+BEFORE (screening.py):
+  results = db.query(ResumeResult).filter(
+      ResumeResult.job_id == job_id
+  ).order_by(ResumeResult.processed_at.desc()).all()   ← no limit
+
+BEFORE (app.py fetch_all_results):
+  @st.cache_data(ttl=300)
+  def fetch_all_results(job_id):
+      res = requests.get(f"{BACKEND_URL}/screening/results/{job_id}", ...)
+
+AFTER (screening.py):
+  @router.get("/results/{job_id}")
+  def get_results(job_id: int, limit: int = 500, offset: int = 0):
+      ...
+      results = db.query(...).order_by(...).offset(offset).limit(limit).all()
+
+  Default limit = 500. Covers all realistic single-job result sets while
+  bounding the query. offset allows future "Load more" support.
+
+AFTER (app.py fetch_all_results):
+  @st.cache_data(ttl=300)
+  def fetch_all_results(job_id, limit=500, offset=0):
+      res = requests.get(
+          f"{BACKEND_URL}/screening/results/{job_id}",
+          params={"limit": limit, "offset": offset},
+          headers=get_headers(),
+          timeout=30
+      )
+
+IMPACT: DB query is now bounded. Response payload is capped at 500 rows.
+  All existing client-side filtering (date, decision, year, score) still
+  works on the fetched dataset. Future "Load more" can increment offset.
+
+================================================================================
+SUMMARY OF FILES CHANGED
+================================================================================
+
+  backend/api/jobs.py             — N2: single-transaction update_job
+  backend/api/screening.py        — N12: GET /runs/{run_id} endpoint
+                                    R5: limit/offset on GET /results/{job_id}
+  frontend/api_client.py          — N3: timeout=30 on all requests
+                                    N12: get_run_status() function
+  frontend/app.py                 — N3: timeout on inline screening POST
+                                    N4: pd.to_numeric before Int64 cast
+                                    N12: st.fragment progress block
+                                    R5: limit/offset params in fetch
+  frontend/email_db_client.py     — N5: has_conflicting_email() helper
+  frontend/pages/4_Shortlisting_Emails.py  — N5: conflict check before send
+
+================================================================================

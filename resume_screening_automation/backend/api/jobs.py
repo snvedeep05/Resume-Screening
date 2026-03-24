@@ -1,8 +1,7 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 from db.session import SessionLocal
 from db.models import JobConfig
 from services.ai_service import generate_job_config
-from fastapi import HTTPException
 router = APIRouter()
 
 @router.post("")
@@ -68,11 +67,8 @@ def update_job(job_id: int, payload: dict):
         if not old_job:
             raise HTTPException(status_code=404, detail="Job not found or already inactive")
 
-        # Deactivate the old version
+        # Deactivate old + create new in a single atomic transaction
         old_job.is_active = False
-        db.commit()
-
-        # Create the new version
         new_job = JobConfig(
             job_title=payload.get("job_title", old_job.job_title),
             job_config=payload.get("job_config", old_job.job_config),
@@ -80,7 +76,11 @@ def update_job(job_id: int, payload: dict):
             is_active=True
         )
         db.add(new_job)
-        db.commit()
+        try:
+            db.commit()
+        except Exception:
+            db.rollback()
+            raise HTTPException(status_code=500, detail="Failed to update job config")
         db.refresh(new_job)
 
         return {

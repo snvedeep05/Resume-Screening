@@ -1,11 +1,9 @@
 import streamlit as st
-import os
 import json
 import requests
-from api_client import create_job, get_jobs, get_job, generate_job_config_ai, update_job, get_headers
+from api_client import create_job, get_jobs, get_job, generate_job_config_ai, update_job, get_headers, get_run_status
 import pandas as pd
 from io import BytesIO
-import streamlit as st
 
 
 # MUST BE FIRST
@@ -325,6 +323,8 @@ with tab1:
     # ---------- Session State ----------
     if "screening_started" not in st.session_state:
         st.session_state.screening_started = False
+    if "current_run_id" not in st.session_state:
+        st.session_state.current_run_id = None
 
     # ---------- Start Screening ----------
     if st.button(
@@ -353,23 +353,16 @@ with tab1:
                     f"{BACKEND_URL}/screening/start",
                     files=files,
                     data=data,
-                    headers=get_headers()
+                    headers=get_headers(),
+                    timeout=30
                 )
 
                 if res.status_code == 200:
                     response = res.json()
+                    st.session_state.current_run_id = response["run_id"]
 
                     st.success("Screening started successfully ✅")
-
-                    st.markdown(
-                        f"""
-                        **Run ID:** {response["run_id"]}  
-                        **Batch size:** 10  
-
-                        📌 *Resumes are now being processed in the background.*  
-                        📌 *Live batch & resume updates are visible in the backend terminal.*
-                        """
-                    )
+                    st.markdown(f"**Run ID:** {response['run_id']} · **Batch size:** 10")
 
                 else:
                     st.error("Failed to start screening")
@@ -378,6 +371,36 @@ with tab1:
             except Exception as e:
                 st.error(f"Error calling backend: {e}")
                 st.session_state.screening_started = False
+
+    # ---------- Live Progress (30s polling) ----------
+    if st.session_state.current_run_id:
+
+        @st.fragment(run_every=30)
+        def show_run_progress():
+            run_id = st.session_state.current_run_id
+            if not run_id:
+                return
+            try:
+                status = get_run_status(run_id)
+                total      = status["total_resumes"] or 1
+                processed  = status["processed_count"]
+                failed     = status["failed_count"]
+                run_status = status["status"]
+
+                if run_status == "completed":
+                    st.success(f"✅ Run {run_id} complete — {processed} processed · {failed} failed")
+                    st.session_state.current_run_id = None
+                elif run_status == "crashed":
+                    st.error(f"❌ Run {run_id} crashed — {processed} processed · {failed} failed")
+                    st.session_state.current_run_id = None
+                else:
+                    progress_val = processed / total if total > 0 else 0
+                    st.progress(progress_val)
+                    st.caption(f"⏳ Run {run_id} — {processed} / {total} processed · {failed} failed")
+            except Exception:
+                st.caption("Checking run status...")
+
+        show_run_progress()
 
 with tab3:
     st.header("📊 Results Dashboard")
@@ -406,10 +429,12 @@ with tab3:
     # ----------------------------
 
     @st.cache_data(ttl=300)
-    def fetch_all_results(job_id):
+    def fetch_all_results(job_id, limit=500, offset=0):
         res = requests.get(
             f"{BACKEND_URL}/screening/results/{job_id}",
-            headers=get_headers()
+            params={"limit": limit, "offset": offset},
+            headers=get_headers(),
+            timeout=30
         )
         if res.status_code != 200:
             return pd.DataFrame()
@@ -427,7 +452,9 @@ with tab3:
 
     # Convert passed_out_year to nullable int (avoids 2025.0 display)
     if "passed_out_year" in df.columns:
-        df["passed_out_year"] = df["passed_out_year"].astype("Int64")
+        df["passed_out_year"] = pd.to_numeric(
+            df["passed_out_year"], errors="coerce"
+        ).astype("Int64")
 
     # ----------------------------
     # FILTERS

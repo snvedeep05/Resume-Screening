@@ -3,6 +3,20 @@ import zipfile
 import tempfile
 import hashlib
 from datetime import datetime
+from email_validator import validate_email, EmailNotValidError
+
+
+def _normalize_email(extracted_data: dict) -> dict:
+    """Set personal_details.email to None if the AI returned a non-email string."""
+    personal = extracted_data.get("personal_details")
+    if not isinstance(personal, dict):
+        return extracted_data
+    raw = str(personal.get("email") or "").strip()
+    try:
+        personal["email"] = validate_email(raw, check_deliverability=False).email
+    except EmailNotValidError:
+        personal["email"] = None
+    return extracted_data
 
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException, BackgroundTasks
 from groq import RateLimitError
@@ -113,6 +127,8 @@ def process_zip_and_screen(
 
             print(f"[RUN {run_id}] Total resumes found: {len(resume_files)}")
 
+            rate_limit_hit = False
+
             for i in range(0, len(resume_files), batch_size):
                 batch = resume_files[i:i + batch_size]
                 batch_no = (i // batch_size) + 1
@@ -123,6 +139,33 @@ def process_zip_and_screen(
                 for idx, resume_path in enumerate(batch, start=1):
                     overall_index = i + idx
                     file_name = os.path.basename(resume_path)
+
+                    if rate_limit_hit:
+                        resume_id = get_or_create_resume(db, resume_path)
+                        existing_result = db.query(ResumeResult).filter(
+                            ResumeResult.resume_id == resume_id,
+                            ResumeResult.job_id == job_id,
+                            ResumeResult.extracted_data.isnot(None)
+                        ).first()
+
+                        if existing_result:
+                            print(f"[RUN {run_id}] Rate limit hit but reusing existing result → {file_name}")
+                            existing_result.run_id = run_id
+                            existing_result.processed_at = datetime.utcnow()
+                            existing_result.ai_status = "reused"
+                            run.processed_count += 1
+                        else:
+                            print(f"[RUN {run_id}] ⏳ Skipping (rate limit already hit) → {file_name}")
+                            run.failed_count += 1
+                            db.add(ResumeResult(
+                                run_id=run_id,
+                                resume_id=resume_id,
+                                job_id=job_id,
+                                ai_status="rate_limited",
+                                error_message="Groq rate limit hit earlier in this run"
+                            ))
+                        db.commit()
+                        continue
 
                     print(
                         f"[RUN {run_id}] Processing resume "
@@ -176,6 +219,8 @@ def process_zip_and_screen(
                                 extracted = process_single_resume(resume_path)
                                 extracted_data = extracted["extracted_data"]
 
+                            extracted_data = _normalize_email(extracted_data)
+
                             # Score for this job
                             score, reason = score_resume(
                                 job_config,
@@ -207,6 +252,7 @@ def process_zip_and_screen(
 
                     except RateLimitError as e:
                         print(f"[RUN {run_id}] ⏳ Groq rate limit hit: {file_name}")
+                        rate_limit_hit = True
                         db.rollback()
                         run.failed_count += 1
                         if resume_id:
@@ -265,8 +311,28 @@ def process_zip_and_screen(
         db.close()
 
 
+@router.get("/runs/{run_id}")
+def get_run_status(run_id: int):
+    db = SessionLocal()
+    try:
+        run = db.query(ResumeRun).filter_by(run_id=run_id).first()
+        if not run:
+            raise HTTPException(status_code=404, detail="Run not found")
+        return {
+            "run_id":          run.run_id,
+            "status":          run.status,
+            "total_resumes":   run.total_resumes,
+            "processed_count": run.processed_count,
+            "failed_count":    run.failed_count,
+            "started_at":      run.started_at,
+            "ended_at":        run.ended_at,
+        }
+    finally:
+        db.close()
+
+
 @router.get("/results/{job_id}")
-def get_results(job_id: int):
+def get_results(job_id: int, limit: int = 500, offset: int = 0):
     print("Fetching results from DB")
     db = SessionLocal()
     try:
@@ -280,7 +346,7 @@ def get_results(job_id: int):
 
         results = db.query(ResumeResult).filter(
             ResumeResult.job_id == job_id
-        ).order_by(ResumeResult.processed_at.desc()).all()
+        ).order_by(ResumeResult.processed_at.desc()).offset(offset).limit(limit).all()
 
         output = []
 
