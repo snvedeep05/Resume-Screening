@@ -331,6 +331,22 @@ def get_run_status(run_id: int):
         db.close()
 
 
+@router.patch("/results/{result_id}")
+def patch_result(result_id: int, body: dict):
+    db = SessionLocal()
+    try:
+        result = db.query(ResumeResult).filter_by(result_id=result_id).first()
+        if not result:
+            raise HTTPException(status_code=404, detail="Result not found")
+        if "decision" in body:
+            val = body["decision"]
+            result.decision = val if val in ("shortlisted", "rejected") else result.decision
+        db.commit()
+        return {"result_id": result_id, "decision": result.decision}
+    finally:
+        db.close()
+
+
 @router.get("/results/{job_id}")
 def get_results(job_id: int, limit: int = 500, offset: int = 0):
     print("Fetching results from DB")
@@ -355,6 +371,7 @@ def get_results(job_id: int, limit: int = 500, offset: int = 0):
                 pd_data = r.extracted_data.get("personal_details", {})
 
                 output.append({
+                    "result_id": r.result_id,
                     "full_name": pd_data.get("full_name"),
                     "email": pd_data.get("email"),
                     "phone": pd_data.get("phone"),

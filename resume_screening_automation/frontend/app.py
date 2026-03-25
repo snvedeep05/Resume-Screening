@@ -1,7 +1,8 @@
 import streamlit as st
 import json
 import requests
-from api_client import create_job, get_jobs, get_job, generate_job_config_ai, update_job, get_headers, get_run_status
+from api_client import create_job, get_jobs, get_job, generate_job_config_ai, update_job, get_headers, get_run_status, update_decision
+from email_db_client import get_session, seed_candidate
 import pandas as pd
 from io import BytesIO
 
@@ -566,28 +567,118 @@ with tab3:
     col3.metric("Rejected", rejected_count)
 
     # ----------------------------
-    # DISPLAY TABLE
+    # DISPLAY TABLE (editable decision)
     # ----------------------------
 
     st.subheader("Results")
+    st.caption("You can edit the **Decision** column to override the AI's decision before adding to pipeline.")
 
     display_cols = [
-        "full_name", "email", "phone",
+        "result_id", "full_name", "email", "phone",
         "job_title", "passed_out_year",
         "score", "decision", "decision_reason", "processed_at"
     ]
     display_cols = [c for c in display_cols if c in filtered_df.columns]
 
-    st.dataframe(
+    edited_df = st.data_editor(
         filtered_df[display_cols],
-        use_container_width=True
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "result_id":       st.column_config.NumberColumn("ID",        disabled=True),
+            "full_name":       st.column_config.TextColumn("Name",        disabled=True),
+            "email":           st.column_config.TextColumn("Email",       disabled=True),
+            "phone":           st.column_config.TextColumn("Phone",       disabled=True),
+            "job_title":       st.column_config.TextColumn("Job",         disabled=True),
+            "passed_out_year": st.column_config.NumberColumn("Year",      disabled=True),
+            "score":           st.column_config.NumberColumn("Score",     disabled=True),
+            "decision":        st.column_config.SelectboxColumn(
+                                   "Decision",
+                                   options=["shortlisted", "rejected"],
+                                   required=True,
+                               ),
+            "decision_reason": st.column_config.TextColumn("Reason",      disabled=True),
+            "processed_at":    st.column_config.DatetimeColumn("Processed", disabled=True),
+        },
+        key="results_editor",
     )
+
+    # Save any decision changes made in the table
+    if st.button("💾 Save Decision Changes", key="save_decisions"):
+        changed = 0
+        errors  = 0
+        for _, orig_row in filtered_df[display_cols].iterrows():
+            edited_row = edited_df.loc[orig_row.name] if orig_row.name in edited_df.index else None
+            if edited_row is None:
+                continue
+            if orig_row["decision"] != edited_row["decision"]:
+                try:
+                    update_decision(int(orig_row["result_id"]), edited_row["decision"])
+                    changed += 1
+                except Exception:
+                    errors += 1
+        if changed:
+            st.success(f"✅ {changed} decision(s) updated.")
+            st.cache_data.clear()
+        if errors:
+            st.error(f"❌ {errors} update(s) failed.")
+        if not changed and not errors:
+            st.info("No changes detected.")
+
+    st.divider()
+
+    # ----------------------------
+    # ADD TO PIPELINE
+    # ----------------------------
+
+    shortlisted_df = edited_df[edited_df["decision"] == "shortlisted"] if "decision" in edited_df.columns else pd.DataFrame()
+
+    st.subheader("📋 Add to Pipeline")
+    st.markdown(
+        f"**{len(shortlisted_df)}** shortlisted candidate(s) will be added. "
+        "Candidates already in the pipeline will be skipped."
+    )
+
+    if st.button("➕ Add Shortlisted to Pipeline", disabled=shortlisted_df.empty, key="add_to_pipeline"):
+        db    = get_session()
+        added = 0
+        skipped = 0
+        try:
+            for _, row in shortlisted_df.iterrows():
+                email     = str(row.get("email") or "").strip()
+                full_name = str(row.get("full_name") or "").strip()
+                phone     = str(row.get("phone") or "").strip()
+                score     = int(row["score"]) if row.get("score") is not None else 0
+                result_id = int(row["result_id"]) if row.get("result_id") is not None else None
+
+                if not email:
+                    skipped += 1
+                    continue
+
+                seeded = seed_candidate(
+                    db,
+                    job_id=selected_job_id,
+                    email=email,
+                    full_name=full_name,
+                    phone=phone,
+                    score=score,
+                    result_id=result_id,
+                )
+                if seeded:
+                    added += 1
+                else:
+                    skipped += 1
+        finally:
+            db.close()
+
+        if added:
+            st.success(f"✅ {added} candidate(s) added to pipeline.")
+        if skipped:
+            st.info(f"⏩ {skipped} skipped (already in pipeline or no email).")
 
     # ----------------------------
     # DOWNLOAD EXCEL
     # ----------------------------
-
-    
 
     output = BytesIO()
     filtered_df.to_excel(output, index=False)
@@ -600,7 +691,7 @@ with tab3:
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         key="results_download_button"
     )
-    
+
     json_data = filtered_df.to_dict(orient="records")
 
     st.download_button(

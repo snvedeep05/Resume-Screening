@@ -76,3 +76,15 @@ def get_run_status(run_id):
     )
     response.raise_for_status()
     return response.json()
+
+
+def update_decision(result_id: int, decision: str):
+    """Update the decision for a screening result (HR override)."""
+    response = requests.patch(
+        f"{BACKEND_URL}/screening/results/{result_id}",
+        json={"decision": decision},
+        headers=get_headers(),
+        timeout=30
+    )
+    response.raise_for_status()
+    return response.json()

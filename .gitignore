@@ -1,0 +1,28 @@
+# Environment variables — never commit these
+.env
+.env.local
+.env.*.local
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Streamlit secrets (contains API keys)
+.streamlit/secrets.toml
+
+# Generated files
+*.docx
+*.xlsx
+*.zip
+
+# IDE
+.vscode/
+.idea/
