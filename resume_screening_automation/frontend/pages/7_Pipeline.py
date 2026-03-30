@@ -202,13 +202,18 @@ st.divider()
 # ── Load candidates ────────────────────────────────────────────────────────────
 
 if st.button("🔄 Refresh", key="pipeline_refresh"):
+    st.cache_data.clear()
     st.rerun()
 
-db = get_session()
-try:
-    candidates = get_pipeline_candidates(db, job_id=selected_job_id)
-finally:
-    db.close()
+@st.cache_data(ttl=60, show_spinner=False)
+def load_candidates(job_id: int) -> list:
+    db = get_session()
+    try:
+        return get_pipeline_candidates(db, job_id=job_id)
+    finally:
+        db.close()
+
+candidates = load_candidates(selected_job_id)
 
 if not candidates:
     st.info("No candidates in the pipeline for this job yet. Go to Results Dashboard → Add Shortlisted to Pipeline.")
@@ -223,8 +228,20 @@ df["days_in_stage"]    = df["stage_updated_at"].apply(
 df["stale"]            = df["days_in_stage"].apply(staleness_icon)
 df["stage_label"]      = df["stage"].map(STAGE_LABELS).fillna(df["stage"])
 
-# Stage filter
+# Stage counts (used for summary + filter labels)
 stage_counts = df["stage"].value_counts().to_dict()
+
+# ── Pipeline Summary ───────────────────────────────────────────────────────────
+
+st.subheader("Pipeline Summary")
+summary_cols = st.columns(len(STAGE_ORDER))
+for col, stage in zip(summary_cols, STAGE_ORDER):
+    col.metric(STAGE_LABELS.get(stage, stage), stage_counts.get(stage, 0))
+
+st.divider()
+
+# ── Filters ────────────────────────────────────────────────────────────────────
+
 stage_options = ["All"] + [s for s in STAGE_ORDER if s in stage_counts]
 stage_labels_with_count = []
 for s in stage_options:
@@ -257,14 +274,23 @@ view_df = df if selected_stage == "All" else df[df["stage"] == selected_stage].c
 # Auto-select from pasted emails
 pasted_emails = parse_pasted_emails(paste_text) if paste_text.strip() else set()
 
+# Select All checkbox — resets when filter changes
+select_all_key = f"select_all_{selected_stage_label}"
+select_all = st.checkbox("Select All", key=select_all_key)
+
 # Build display table
 view_df = view_df.copy()
-view_df["Select"] = view_df["email"].str.lower().isin(pasted_emails) if pasted_emails else False
+if select_all:
+    view_df["Select"] = True
+elif pasted_emails:
+    view_df["Select"] = view_df["email"].str.lower().isin(pasted_emails)
+else:
+    view_df["Select"] = False
 
 display_cols = ["Select", "full_name", "email", "phone", "score", "stage_label", "days_in_stage"]
 display_cols = [c for c in display_cols if c in view_df.columns]
 
-# Key changes with the active stage filter so the table (and Select All checkbox) resets cleanly
+# Key changes with the active stage filter so the table resets cleanly on filter change
 table_key = f"pipeline_table_{selected_stage_label}"
 
 edited = st.data_editor(
@@ -292,14 +318,6 @@ selected_count   = len(selected_ids)
 
 if selected_count:
     st.markdown(f"**{selected_count}** candidate(s) selected")
-
-# ── Pipeline Summary (always visible) ─────────────────────────────────────────
-
-st.divider()
-st.subheader("Pipeline Summary")
-summary_cols = st.columns(len(STAGE_ORDER))
-for col, stage in zip(summary_cols, STAGE_ORDER):
-    col.metric(STAGE_LABELS.get(stage, stage), stage_counts.get(stage, 0))
 
 st.divider()
 
