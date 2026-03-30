@@ -8,3 +8,5 @@ python-docx
 pdfplumber
 python-multipart
 email-validator
+alembic
+pytest

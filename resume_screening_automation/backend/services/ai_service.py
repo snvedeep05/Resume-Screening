@@ -3,7 +3,16 @@ import json
 from groq import Groq
 from prompts.recruiter_prompt import JOB_CONFIG_PROMPT
 
-client = Groq(api_key=os.getenv("GROQ_API_KEY"))
+_client = None
+
+def get_client():
+    global _client
+    if _client is None:
+        api_key = os.getenv("GROQ_API_KEY")
+        if not api_key:
+            raise RuntimeError("GROQ_API_KEY is not set")
+        _client = Groq(api_key=api_key)
+    return _client
 
 def normalize_scoring_weights(weights: dict) -> dict:
     total = sum(weights.values())
@@ -23,7 +32,7 @@ def normalize_scoring_weights(weights: dict) -> dict:
 
 
 def generate_job_config(job_description: str) -> dict:
-    response = client.chat.completions.create(
+    response = get_client().chat.completions.create(
         model="llama-3.1-8b-instant",
         messages=[
             {"role": "system", "content": JOB_CONFIG_PROMPT},

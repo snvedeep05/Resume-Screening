@@ -432,7 +432,7 @@ with tab3:
     @st.cache_data(ttl=300)
     def fetch_all_results(job_id, limit=500, offset=0):
         res = requests.get(
-            f"{BACKEND_URL}/screening/results/{job_id}",
+            f"{BACKEND_URL}/screening/results/job/{job_id}",
             params={"limit": limit, "offset": offset},
             headers=get_headers(),
             timeout=30

@@ -13,6 +13,17 @@ from sqlalchemy.sql import func
 Base = declarative_base()
 
 
+class Candidate(Base):
+    __tablename__ = "candidates"
+
+    candidate_id = Column(Integer, primary_key=True)
+    email = Column(Text, unique=True, nullable=True)
+    phone = Column(Text, nullable=True)
+    full_name = Column(Text, nullable=True)
+    created_at = Column(TIMESTAMP, server_default=func.now())
+    updated_at = Column(TIMESTAMP, server_default=func.now(), onupdate=func.now())
+
+
 class JobConfig(Base):
     __tablename__ = "job_configs"
 
@@ -55,6 +66,7 @@ class ResumeResult(Base):
     run_id = Column(Integer, ForeignKey("resume_runs.run_id"), nullable=False)
     resume_id = Column(Integer, ForeignKey("resume_files.resume_id"), nullable=False)
     job_id = Column(Integer, ForeignKey("job_configs.job_id"), nullable=False)
+    candidate_id = Column(Integer, ForeignKey("candidates.candidate_id"), nullable=True)
 
     extracted_data = Column(JSON)
     score = Column(Integer)
@@ -65,3 +77,14 @@ class ResumeResult(Base):
     ai_status = Column(Text)
     error_message = Column(Text)
     processed_at = Column(TIMESTAMP, server_default=func.now())
+
+
+class DecisionAudit(Base):
+    __tablename__ = "decision_audit"
+
+    audit_id = Column(Integer, primary_key=True)
+    result_id = Column(Integer, ForeignKey("resume_results.result_id"), nullable=False)
+    old_decision = Column(Text)
+    new_decision = Column(Text, nullable=False)
+    changed_at = Column(TIMESTAMP, server_default=func.now())
+    reason = Column(Text)
