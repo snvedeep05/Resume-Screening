@@ -329,49 +329,56 @@ if selected_count == 0:
     st.info("Select candidates above using the checkboxes or paste their emails.")
     st.stop()
 
-# Determine the current stage of selected candidates (must all be same stage for forward actions)
-selected_stages = selected_rows["stage"].unique().tolist()
-uniform_stage   = selected_stages[0] if len(selected_stages) == 1 else None
+# Show one action button per stage present in the selection (in pipeline order).
+# Each button triggers a confirmation dialog — emails are only sent after confirming.
+selected_rows_list = selected_rows.to_dict("records")
+reject_eligible    = [r for r in selected_rows_list if r["stage"] not in TERMINAL_STAGES]
 
-col_forward, col_reject = st.columns([3, 1])
+actionable_stages = [
+    s for s in STAGE_ORDER
+    if s in selected_rows["stage"].values and s not in TERMINAL_STAGES and s in ACTIONS
+]
 
-with col_forward:
-    if uniform_stage and uniform_stage not in TERMINAL_STAGES and uniform_stage in ACTIONS:
-        action = ACTIONS[uniform_stage]
+if not actionable_stages and not reject_eligible:
+    st.info("All selected candidates are already at a terminal stage (joined / rejected).")
+else:
+    btn_cols = st.columns(len(actionable_stages) + 1)
+
+    for i, stage in enumerate(actionable_stages):
+        action      = ACTIONS[stage]
         template_id = action["template_id"]
         is_active   = template_id is None or template_id in ACTIVE_TEMPLATES
+        rows_in     = [r for r in selected_rows_list if r["stage"] == stage]
 
-        if not is_active:
-            st.warning(
-                f"⚠️ Template #{template_id} is not yet active in Brevo. "
-                f"Activate it first, then this action will be enabled."
-            )
+        with btn_cols[i]:
+            if not is_active:
+                st.warning(f"⚠️ Template #{template_id} not yet active in Brevo.")
+            if st.button(
+                f"{action['label']} ({len(rows_in)})",
+                disabled=not is_active,
+                key=f"forward_{stage}",
+            ):
+                st.session_state["confirm_action"] = {
+                    "type":          "forward",
+                    "action":        action,
+                    "stage":         stage,
+                    "selected_ids":  [r["pipeline_id"] for r in rows_in],
+                    "selected_rows": rows_in,
+                }
 
-        if st.button(action["label"], disabled=not is_active, key="forward_action"):
-            st.session_state["confirm_action"] = {
-                "type":        "forward",
-                "action":      action,
-                "stage":       uniform_stage,
-                "selected_ids": selected_ids,
-                "selected_rows": selected_rows.to_dict("records"),
-            }
-    elif uniform_stage in TERMINAL_STAGES:
-        st.info(f"Selected candidates are already at a terminal stage: **{STAGE_LABELS.get(uniform_stage, uniform_stage)}**.")
-    elif not uniform_stage:
-        st.warning("Selected candidates are at different stages. Select candidates at the same stage to use the forward action.")
-
-with col_reject:
-    reject_eligible = [
-        r for r in selected_rows.to_dict("records") if r["stage"] not in TERMINAL_STAGES
-    ]
-    if reject_eligible:
-        if st.button(REJECT_ACTION["label"], key="reject_action", type="secondary"):
-            st.session_state["confirm_action"] = {
-                "type":         "reject",
-                "action":       REJECT_ACTION,
-                "selected_ids": [r["pipeline_id"] for r in reject_eligible],
-                "selected_rows": reject_eligible,
-            }
+    with btn_cols[-1]:
+        if reject_eligible:
+            if st.button(
+                f"{REJECT_ACTION['label']} ({len(reject_eligible)})",
+                key="reject_action",
+                type="secondary",
+            ):
+                st.session_state["confirm_action"] = {
+                    "type":          "reject",
+                    "action":        REJECT_ACTION,
+                    "selected_ids":  [r["pipeline_id"] for r in reject_eligible],
+                    "selected_rows": reject_eligible,
+                }
 
 # ── Confirmation dialog ────────────────────────────────────────────────────────
 
@@ -384,19 +391,20 @@ if "confirm_action" in st.session_state:
     st.divider()
 
     if action["template_id"]:
-        st.info(
-            f"**{action['label']}** will be sent to **{len(ids)}** candidate(s). "
-            f"Template: #{action['template_id']}."
+        st.warning(
+            f"⚠️ **{action['label']}** — email will be sent to **{len(ids)}** candidate(s). "
+            f"This cannot be undone. Click **Confirm** to proceed."
         )
     else:
-        st.info(
-            f"**{action['label']}** will mark **{len(ids)}** candidate(s) as "
-            f"**{STAGE_LABELS.get(action['next_stage'], action['next_stage'])}** — no email."
+        st.warning(
+            f"⚠️ **{action['label']}** — **{len(ids)}** candidate(s) will be marked as "
+            f"**{STAGE_LABELS.get(action['next_stage'], action['next_stage'])}**. "
+            f"Click **Confirm** to proceed."
         )
 
     col_confirm, col_cancel = st.columns([1, 4])
-    confirm = col_confirm.button("✅ Confirm", key="confirm_btn")
-    cancel  = col_cancel.button("✖ Cancel",  key="cancel_btn")
+    confirm = col_confirm.button("✅ Confirm & Send", key="confirm_btn")
+    cancel  = col_cancel.button("✖ Cancel",          key="cancel_btn")
 
     if cancel:
         del st.session_state["confirm_action"]
