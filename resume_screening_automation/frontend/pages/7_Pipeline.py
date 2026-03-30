@@ -261,24 +261,26 @@ pasted_emails = parse_pasted_emails(paste_text) if paste_text.strip() else set()
 view_df = view_df.copy()
 view_df["Select"] = view_df["email"].str.lower().isin(pasted_emails) if pasted_emails else False
 
-display_cols = ["Select", "stale", "full_name", "email", "phone", "score", "stage_label", "days_in_stage"]
+display_cols = ["Select", "full_name", "email", "phone", "score", "stage_label", "days_in_stage"]
 display_cols = [c for c in display_cols if c in view_df.columns]
+
+# Key changes with the active stage filter so the table (and Select All checkbox) resets cleanly
+table_key = f"pipeline_table_{selected_stage_label}"
 
 edited = st.data_editor(
     view_df[display_cols].reset_index(drop=True),
     use_container_width=True,
     hide_index=True,
     column_config={
-        "Select":      st.column_config.CheckboxColumn("☐",         width="small"),
-        "stale":       st.column_config.TextColumn("",              disabled=True, width="small"),
-        "full_name":   st.column_config.TextColumn("Name",          disabled=True),
-        "email":       st.column_config.TextColumn("Email",         disabled=True),
-        "phone":       st.column_config.TextColumn("Phone",         disabled=True),
-        "score":       st.column_config.NumberColumn("Score",       disabled=True, width="small"),
-        "stage_label": st.column_config.TextColumn("Stage",         disabled=True),
+        "Select":        st.column_config.CheckboxColumn("☐",           width="small"),
+        "full_name":     st.column_config.TextColumn("Name",            disabled=True),
+        "email":         st.column_config.TextColumn("Email",           disabled=True),
+        "phone":         st.column_config.TextColumn("Phone",           disabled=True),
+        "score":         st.column_config.NumberColumn("Score",         disabled=True, width="small"),
+        "stage_label":   st.column_config.TextColumn("Stage",           disabled=True),
         "days_in_stage": st.column_config.NumberColumn("Days in Stage", disabled=True, width="small"),
     },
-    key="pipeline_table",
+    key=table_key,
 )
 
 # Map selections back to pipeline rows
@@ -290,6 +292,14 @@ selected_count   = len(selected_ids)
 
 if selected_count:
     st.markdown(f"**{selected_count}** candidate(s) selected")
+
+# ── Pipeline Summary (always visible) ─────────────────────────────────────────
+
+st.divider()
+st.subheader("Pipeline Summary")
+summary_cols = st.columns(len(STAGE_ORDER))
+for col, stage in zip(summary_cols, STAGE_ORDER):
+    col.metric(STAGE_LABELS.get(stage, stage), stage_counts.get(stage, 0))
 
 st.divider()
 
@@ -510,12 +520,3 @@ if "last_action" in st.session_state:
     else:
         del st.session_state["last_action"]
 
-# ── Summary metrics ────────────────────────────────────────────────────────────
-
-st.divider()
-st.subheader("Pipeline Summary")
-
-cols = st.columns(len(STAGE_ORDER))
-for col, stage in zip(cols, STAGE_ORDER):
-    count = stage_counts.get(stage, 0)
-    col.metric(STAGE_LABELS.get(stage, stage), count)
