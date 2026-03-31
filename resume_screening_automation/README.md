@@ -295,6 +295,7 @@ This system allows a recruiter to:
 3. Let the system **automatically extract** structured data from each resume using AI
 4. **Score and rank** each candidate against the job requirements
 5. View and **download results** from a dashboard (Excel or JSON)
+6. **Manage a candidate pipeline** — track stage progression from shortlisting through assignment, interview, offer, and joining
 
 ---
 
@@ -348,14 +349,18 @@ resume_screening_automation/
     ├── app.py                         # Streamlit main app (Tabs 1–3)
     ├── api_client.py                  # HTTP client helpers
     ├── brevo_client.py                # Brevo API client + daily stats
-    ├── email_db_client.py             # email_logs table + helpers
+    ├── api_client.py                  # HTTP client helpers (includes update_decision)
+    ├── brevo_client.py                # Brevo API client + daily stats
+    ├── email_db_client.py             # email_logs, candidate_pipeline, email_queue models + helpers
     ├── email_utils.py                 # Shared Brevo usage banner
+    ├── db_stage_map.py                # Pipeline stage constants + Brevo template ID mapping
     ├── pyproject.toml                 # Python 3.11 lock for Streamlit Cloud
     ├── requirements.txt               # Frontend dependencies
     └── pages/
         ├── 4_Shortlisting_Emails.py   # Shortlist/rejection email sender
         ├── 5_Assignment_Emails.py     # Assignment email sender
-        └── 6_Email_Dashboard.py       # Email log + chart dashboard
+        ├── 6_Email_Dashboard.py       # Email log + chart dashboard
+        └── 7_Pipeline.py              # Candidate pipeline — stage tracking + bulk email actions
 ```
 
 ---
@@ -427,9 +432,52 @@ Tracks every email sent via Brevo. Prevents duplicate sends across runs.
 | template_id | Integer   | Brevo template ID (28=Shortlisted, 36=Rejected, 30=Assignment) |
 | full_name   | Text      | Recipient name                                       |
 | job_title   | Text      | Job title for template personalization               |
+| job_id      | Integer   | FK → job_configs (NULL for legacy records)           |
 | sent_at     | Timestamp | Auto-set on send                                     |
 
-Unique constraint on `(email, template_id)` — same email cannot receive the same template twice.
+Unique constraint on `(email, template_id, job_id)` — deduplication is per-job. Legacy NULL records have a separate partial unique index on `(email, template_id)`.
+
+---
+
+### `candidate_pipeline`
+Tracks each candidate's current stage in the hiring pipeline per job.
+
+| Column           | Type      | Description                                          |
+|------------------|-----------|------------------------------------------------------|
+| pipeline_id      | Integer   | Primary key                                          |
+| job_id           | Integer   | FK → job_configs                                     |
+| result_id        | Integer   | FK → resume_results (nullable)                       |
+| email            | Text      | Candidate email                                      |
+| full_name        | Text      | Candidate name                                       |
+| phone            | Text      | Candidate phone                                      |
+| score            | Integer   | Screening score                                      |
+| stage            | Text      | Current pipeline stage (see stages below)            |
+| stage_updated_at | Timestamp | When stage last changed                              |
+| added_at         | Timestamp | When candidate was added to pipeline                 |
+
+**Pipeline stages (in order):**
+`new → shortlisting_sent → assignment_sent → assignment_submitted → interview_sent → selected → offer_sent → joined → rejected`
+
+Terminal stages: `joined`, `rejected` — no further actions possible.
+
+---
+
+### `email_queue`
+Queues emails that could not be sent due to Brevo's 300/day limit. Processed on the next day.
+
+| Column          | Type      | Description                                          |
+|-----------------|-----------|------------------------------------------------------|
+| queue_id        | Integer   | Primary key                                          |
+| pipeline_id     | Integer   | FK → candidate_pipeline (nullable)                   |
+| job_id          | Integer   | FK → job_configs                                     |
+| email           | Text      | Recipient email                                      |
+| full_name       | Text      | Recipient name                                       |
+| template_id     | Integer   | Brevo template ID to send                            |
+| params          | JSON      | Template personalization params                      |
+| stage_after_send| Text      | Pipeline stage to set after successful send          |
+| status          | Text      | `pending`, `sent`, or `failed`                       |
+| queued_at       | Timestamp | Auto-set on creation                                 |
+| sent_at         | Timestamp | Set when successfully sent                           |
 
 ---
 
@@ -501,11 +549,12 @@ Returns the AI-generated `job_config` JSON.
 
 #### Screening — `backend/api/screening.py`
 
-| Method | Path                            | Description                               |
-|--------|---------------------------------|-------------------------------------------|
-| POST   | `/screening/start`              | Upload ZIP of resumes and start screening |
-| GET    | `/screening/runs/{run_id}`      | Get live status of a screening run        |
-| GET    | `/screening/results/{job_id}`   | Get screening results for a job (paginated, default limit=500) |
+| Method | Path                              | Description                               |
+|--------|-----------------------------------|-------------------------------------------|
+| POST   | `/screening/start`                | Upload ZIP of resumes and start screening |
+| GET    | `/screening/runs/{run_id}`        | Get live status of a screening run        |
+| GET    | `/screening/results/{job_id}`     | Get screening results for a job (paginated, default limit=500) |
+| PATCH  | `/screening/results/{result_id}`  | Update the `decision` field for a result  |
 
 **Helper: `get_or_create_resume(db, resume_path)`**
 
@@ -603,7 +652,7 @@ Scores a candidate resume against a job config. Returns `(score: int, reason: st
 | Nice-to-have Skills | `nice_to_have_skills`     | `(matched / total_nice) × weight`                           |
 | Projects            | `projects`                | +10 per domain-matched project, capped at the weight value  |
 | Education           | `education`               | Full weight if any degree matches requirements               |
-| Eligibility         | `eligibility`             | Full weight if `candidate_type` is `any` or `student`       |
+| Eligibility         | `eligibility`             | Full weight if experience and candidate_type requirements met; proportional if partially met; 0 if disqualified |
 
 - Final score is capped at 100
 - Decision threshold: `shortlisted` if score ≥ 60, otherwise `rejected`
@@ -623,6 +672,7 @@ System prompt for job config generation. Instructs the AI to output a strict JSO
   "nice_to_have_skills": ["Docker"],
   "education_requirements": ["B.Tech", "B.E"],
   "candidate_type": "experienced",
+  "required_experience_years": 3,
   "project_expectations": {
     "domains": ["backend", "api"]
   },
@@ -636,7 +686,7 @@ System prompt for job config generation. Instructs the AI to output a strict JSO
 }
 ```
 
-Key rules enforced in the prompt: all `scoring_weights` must be integers summing to exactly 100; no markdown; no hallucination; no missing keys.
+Key rules enforced in the prompt: all `scoring_weights` must be integers summing to exactly 100; no markdown; no hallucination; no missing keys. `required_experience_years` is extracted from phrases like "3+ years", "minimum 2 years", "at least 5 years" — set to `null` if not mentioned.
 
 ---
 
@@ -693,8 +743,9 @@ Main Streamlit app with session-based login and three tabs. Three additional ema
 #### Tab 3 — Results Dashboard
 1. Results fetched from `/screening/results/{job_id}` (5-minute cache)
 2. Filters: date range, decision, passed-out year, minimum score, sort order
-3. Summary metrics + full results table
+3. Summary metrics + full results table with editable `decision` column
 4. Download as Excel or JSON
+5. **Add Shortlisted to Pipeline** button — adds all shortlisted candidates to `candidate_pipeline`, seeding their starting stage from `email_logs` history
 
 #### Page 4 — 📧 Shortlisting / Rejection Emails
 1. Upload reviewed Excel (columns: `full_name`, `email`, `decision`, `job_title`)
@@ -714,6 +765,16 @@ Main Streamlit app with session-based login and three tabs. Three additional ema
 3. Grouped bar chart — Shortlisted vs Rejected per date (Altair)
 4. Filterable log table with CSV export
 
+#### Page 7 — 🔁 Candidate Pipeline
+1. Select job → view all candidates in the pipeline with stage, score, days in stage
+2. Pipeline Summary metrics always visible (count per stage)
+3. Filter by stage; paste emails to auto-select; Select All checkbox
+4. Per-stage action buttons (one per stage present in selection) with candidate count
+5. Reject button available for any non-terminal selection
+6. Double confirmation — warning dialog before any email is sent
+7. Brevo daily limit handled — overflow emails queued to `email_queue`, sent next day via "Send Queued Emails Now"
+8. 5-minute undo window after any bulk action — reverts stages and cancels queued emails
+
 ---
 
 ### API Client
@@ -722,14 +783,18 @@ Main Streamlit app with session-based login and three tabs. Three additional ema
 
 Helper functions that wrap all HTTP calls to the backend.
 
-| Function                        | Method | Endpoint              | Description                       |
-|---------------------------------|--------|-----------------------|-----------------------------------|
-| `get_headers()`                 | —      | —                     | Returns `{"x-api-key": API_KEY}`  |
-| `create_job(title, config)`     | POST   | `/jobs`               | Creates a new job config          |
-| `get_jobs()`                    | GET    | `/jobs`               | Lists all jobs                    |
-| `generate_job_config_ai(desc)`  | POST   | `/jobs/ai-generate`   | AI-generates a job config         |
+| Function                        | Method | Endpoint                            | Description                       |
+|---------------------------------|--------|-------------------------------------|-----------------------------------|
+| `get_headers()`                 | —      | —                                   | Returns `{"x-api-key": API_KEY}`  |
+| `create_job(title, config)`     | POST   | `/jobs`                             | Creates a new job config          |
+| `get_jobs()`                    | GET    | `/jobs`                             | Lists all jobs                    |
+| `get_job(job_id)`               | GET    | `/jobs/{job_id}`                    | Gets a single job config          |
+| `update_job(job_id, ...)`       | PUT    | `/jobs/{job_id}`                    | Updates a job config              |
+| `generate_job_config_ai(desc)`  | POST   | `/jobs/ai-generate`                 | AI-generates a job config         |
+| `get_run_status(run_id)`        | GET    | `/screening/runs/{run_id}`          | Gets live run status              |
+| `update_decision(result_id, d)` | PATCH  | `/screening/results/{result_id}`    | Updates decision for a result     |
 
-All calls include the `x-api-key` header. All calls raise on non-2xx responses.
+All calls include the `x-api-key` header and a 30-second timeout.
 
 ---
 
@@ -791,8 +856,22 @@ if any(resume_degree in job.education_requirements):
     score += weight["education"]
 
 # Eligibility
-if job.candidate_type in ("any", "student"):
+if job.required_experience_years is not None:
+    if resume.experience_years >= job.required_experience_years:
+        score += weight["eligibility"]
+        reason = "Experience met (X yrs >= Y yrs required)"
+    else:
+        # proportional partial score
+        score += int((resume.experience_years / job.required_experience_years) × weight["eligibility"])
+        reason = "Experience partial (X yrs of Y yrs required)"
+        # if candidate_type mismatch: score += 0, prepend disqualification to reason
+elif job.candidate_type in ("any", "student"):
     score += weight["eligibility"]
+
+# Disqualification rules (eligibility weight = 0, reason prepended):
+# - candidate_type="student" but resume has experience_years > 0 → "Not a student"
+# - candidate_type="experienced" or required_experience_years set, resume below threshold
+#   → "Insufficient experience: X yrs (required Y yrs)"
 
 final_score = min(score, 100)
 decision = "shortlisted" if final_score >= 60 else "rejected"
