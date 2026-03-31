@@ -8,6 +8,73 @@ An AI-powered resume screening system that automatically extracts, scores, and r
 
 ### March 2026
 
+#### 20. Experience-Based Eligibility in Scoring
+
+**What:** Added `required_experience_years` (number | null) to the job config schema. When set, the scoring engine enforces experience eligibility — candidates who don't meet the requirement are disqualified in the Reason column while still receiving full skills/projects/education scores.
+
+- AI extracts the value from job description phrases like "3+ years", "minimum 2 years", "more than 1 year", "at least 5 years"
+- `null` if no experience requirement is mentioned — no impact on scoring
+- `candidate_type: "student"` jobs: candidates with any experience get reason `"Not a student (resume shows X yrs experience)"`
+- `candidate_type: "experienced"` or `required_experience_years` set: candidates below threshold get reason `"Insufficient experience: X yrs (required Y yrs)"`
+- Disqualification reason is prepended to the Reason column in the Results Dashboard
+
+**Files changed:** `backend/prompts/recruiter_prompt.py`, `backend/services/scoring_engine.py`
+
+---
+
+#### 19. Candidate Pipeline — Stage-Based Action Buttons + Double Confirmation
+
+**What:** Replaced the single "must select same stage" restriction with per-stage action buttons. Selecting candidates across multiple stages now shows one button per stage present in the selection.
+
+- Each button label shows the count: `Send Shortlisting Email (5)`, `Send Assignment Email (3)`
+- Each button only acts on candidates at that specific stage
+- Reject button always shown for any non-terminal selection with count
+- Clicking any button triggers a warning confirmation dialog — emails only send after clicking **Confirm & Send**
+
+**File changed:** `frontend/pages/7_Pipeline.py`
+
+---
+
+#### 18. Candidate Pipeline — UI Fixes
+
+**What:** Three UI issues fixed on the Pipeline page:
+
+- **Blank column removed** — the empty-header `stale` column removed from the candidate table
+- **Pipeline Summary always visible** — moved above the filters and table so it never disappears when no candidates are selected
+- **Select All checkbox** — added above the table; resets cleanly when stage filter changes (dynamic table key per filter)
+- **DB fetch cached** — `get_pipeline_candidates` cached for 60 seconds (TTL) so checkbox interactions don't re-hit the database on every rerun; Refresh button clears the cache
+
+**File changed:** `frontend/pages/7_Pipeline.py`
+
+---
+
+#### 17. Candidate Pipeline Feature
+
+**What:** New Pipeline page (`pages/7_Pipeline.py`) for end-to-end candidate stage tracking after shortlisting.
+
+**DB changes (migrate.py):**
+- `email_logs.job_id` column added — links sent emails to specific jobs
+- Old unique constraint `(email, template_id)` replaced with `(email, template_id, job_id)` — deduplication is now per-job
+- Partial unique index for legacy NULL `job_id` records
+- `candidate_pipeline` table — tracks each candidate's current stage per job
+- `email_queue` table — queues emails when Brevo's 300/day limit is hit; sent next day
+
+**Pipeline stages (in order):**
+`new → shortlisting_sent → assignment_sent → assignment_submitted → interview_sent → selected → offer_sent → joined → rejected`
+
+**Key features:**
+- Filter by stage with counts; paste emails to auto-select candidates
+- Per-stage action buttons send the appropriate Brevo template and advance the stage
+- Brevo daily limit handling — overflow emails queued automatically and sent next day
+- 5-minute undo window after any bulk action
+- Pipeline Summary metrics always visible above the table
+- Results Dashboard: editable `decision` column + **Add Shortlisted to Pipeline** button
+- Existing email history (legacy `job_id = NULL` records) used to seed correct starting stage when adding candidates
+
+**Files added/changed:** `pages/7_Pipeline.py`, `frontend/db_stage_map.py`, `frontend/email_db_client.py`, `frontend/app.py`, `backend/api/screening.py`, `frontend/api_client.py`, `migrate.py`, `.gitignore`
+
+---
+
 #### 16. Backend `requirements.txt` Cleaned Up
 Removed unused packages (`streamlit`, `PyPDF2`, `openpyxl`) and added `email-validator` which was already in use for resume email normalization but missing from the dependency list. Deleted dev-only scripts `test_db.py` and `test_models.py` (not part of application runtime).
 
