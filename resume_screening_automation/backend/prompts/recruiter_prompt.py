@@ -13,6 +13,7 @@ The JSON must STRICTLY follow this schema and MUST include ALL keys
   "education_requirements": [string],
 
   "candidate_type": "student | experienced | any",
+  "required_experience_years": number | null,
 
   "project_expectations": {
     "domains": [string]
@@ -46,4 +47,5 @@ SCORING WEIGHTS RULES:
 IMPORTANT:
 - Domains must be generic (e.g. "web", "backend", "ai", "ml", "data")
 - Do NOT invent requirements not present in the job description
+- Set "required_experience_years" to null if no experience requirement is mentioned; extract the number from phrases like "3+ years", "minimum 2 years", "more than 1 year", "at least 5 years"
 """

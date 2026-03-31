@@ -99,12 +99,29 @@ def score_resume(job_config: dict, extracted_data: dict) -> tuple[int, str]:
         reasons.append("Education requirement met")
 
     # -------------------------------------------------
-    # 5️⃣ ELIGIBILITY (OPTIONAL / SIMPLE)
+    # 5️⃣ ELIGIBILITY
     # -------------------------------------------------
-    candidate_type = job_config.get("candidate_type", "any")
-    if candidate_type in ("any", "student"):
-        elig_score = weights.get("eligibility", 0)
-        score += elig_score
+    candidate_type   = job_config.get("candidate_type", "any")
+    required_exp     = job_config.get("required_experience_years")
+    resume_exp       = extracted_data.get("experience_years") or 0
+    elig_weight      = weights.get("eligibility", 0)
+    disqualified     = False
+    disqualify_reason = None
+
+    if candidate_type == "student" and resume_exp > 0:
+        disqualified      = True
+        disqualify_reason = f"Not a student (resume shows {resume_exp} yrs experience)"
+
+    elif candidate_type == "experienced" or required_exp is not None:
+        min_exp = required_exp if required_exp is not None else 1
+        if resume_exp < min_exp:
+            disqualified      = True
+            disqualify_reason = f"Insufficient experience: {resume_exp} yrs (required {min_exp} yrs)"
+
+    if disqualified:
+        reasons.insert(0, disqualify_reason)
+    else:
+        score += elig_weight
         reasons.append("Eligibility requirement met")
 
     # -------------------------------------------------
