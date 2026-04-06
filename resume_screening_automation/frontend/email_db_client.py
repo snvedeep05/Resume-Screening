@@ -51,6 +51,20 @@ class CandidatePipeline(Base):
 
 
 
+class CustomEmailLog(Base):
+    """Stores ad-hoc emails sent via the Custom Email Sender page."""
+    __tablename__ = "custom_email_logs"
+
+    log_id        = Column(Integer, primary_key=True)
+    full_name     = Column(Text)
+    email         = Column(Text, nullable=False)
+    job_title     = Column(Text)
+    template_id   = Column(Integer, nullable=False)
+    template_name = Column(Text)
+    reason        = Column(Text)
+    sent_at       = Column(TIMESTAMP, server_default=func.now())
+
+
 class EmailQueue(Base):
     __tablename__ = "email_queue"
 
@@ -141,6 +155,43 @@ def get_all_logs(db) -> list:
             "job_title":   r.job_title,
             "job_id":      r.job_id,
             "sent_at":     r.sent_at,
+        }
+        for r in rows
+    ]
+
+
+# ── CustomEmailLog helpers ─────────────────────────────────────────────────────
+
+def log_custom_email(
+    db,
+    email: str,
+    template_id: int,
+    template_name: str,
+    full_name: str = None,
+    job_title: str = None,
+    reason: str = None,
+):
+    db.add(CustomEmailLog(
+        email=email,
+        template_id=template_id,
+        template_name=template_name,
+        full_name=full_name,
+        job_title=job_title,
+        reason=reason,
+    ))
+    db.commit()
+
+
+def get_custom_email_logs(db) -> list:
+    rows = db.query(CustomEmailLog).order_by(CustomEmailLog.sent_at.desc()).all()
+    return [
+        {
+            "full_name":     r.full_name,
+            "email":         r.email,
+            "job_title":     r.job_title,
+            "template_name": r.template_name,
+            "reason":        r.reason,
+            "sent_at":       r.sent_at,
         }
         for r in rows
     ]
