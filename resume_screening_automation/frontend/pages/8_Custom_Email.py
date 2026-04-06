@@ -188,6 +188,13 @@ if st.session_state.get("custom_confirm"):
                 )
             finally:
                 db.close()
+
+            # Clear form fields so they reset on next render
+            for key in ["custom_name", "custom_email", "custom_job_title", "custom_reason"]:
+                st.session_state.pop(key, None)
+            for param in p["params_found"]:
+                st.session_state.pop(f"extra_{param}", None)
+
             st.success(f"✅ Email sent to **{p['email']}** using **{p['template_name']}**.")
         else:
             st.error("❌ Failed to send email. Check Brevo API key or template settings.")
