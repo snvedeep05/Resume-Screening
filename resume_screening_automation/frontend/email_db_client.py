@@ -269,15 +269,14 @@ def update_pipeline_stage(db, pipeline_id: int, new_stage: str):
 
 
 def bulk_update_stages(db, pipeline_ids: list, new_stage: str):
-    from sqlalchemy import text
+    from sqlalchemy import func
     if not pipeline_ids:
         return
-    db.execute(
-        text(
-            "UPDATE candidate_pipeline SET stage = :stage, "
-            "stage_updated_at = NOW() WHERE pipeline_id = ANY(:ids)"
-        ),
-        {"stage": new_stage, "ids": pipeline_ids},
+    db.query(CandidatePipeline).filter(
+        CandidatePipeline.pipeline_id.in_(pipeline_ids)
+    ).update(
+        {"stage": new_stage, "stage_updated_at": func.now()},
+        synchronize_session=False,
     )
     db.commit()
 
@@ -353,14 +352,10 @@ def mark_queue_failed(db, queue_id: int):
 
 def cancel_queued_emails(db, pipeline_ids: list):
     """Cancel pending queue items for the given pipeline IDs (used for undo)."""
-    from sqlalchemy import text
     if not pipeline_ids:
         return
-    db.execute(
-        text(
-            "UPDATE email_queue SET status='cancelled' "
-            "WHERE pipeline_id = ANY(:ids) AND status='pending'"
-        ),
-        {"ids": pipeline_ids},
-    )
+    db.query(EmailQueue).filter(
+        EmailQueue.pipeline_id.in_(pipeline_ids),
+        EmailQueue.status == "pending",
+    ).update({"status": "cancelled"}, synchronize_session=False)
     db.commit()

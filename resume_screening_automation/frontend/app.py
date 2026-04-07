@@ -160,6 +160,11 @@ with tab2:
                         st.error(f"AI generation failed: {e}")
 
         if st.session_state.job_config:
+            st.caption(
+                "**Experience fields:** `required_experience_years` sets the minimum (e.g. `1`). "
+                "Add `max_experience_years` to cap it (e.g. `2` for a 1–2 yr role). "
+                "Set either to `null` to leave it unrestricted."
+            )
             job_config_text = st.text_area(
                 "Review / Edit Job Config (JSON)",
                 value=json.dumps(st.session_state.job_config, indent=2),
@@ -230,6 +235,11 @@ with tab2:
                 )
 
                 if update_method == "Edit JSON directly":
+                    st.caption(
+                        "**Experience fields:** `required_experience_years` sets the minimum (e.g. `1`). "
+                        "Add `max_experience_years` to cap it (e.g. `2` for a 1–2 yr role). "
+                        "Set either to `null` to leave it unrestricted."
+                    )
                     updated_config_text = st.text_area(
                         "Edit Job Config (JSON)",
                         value=json.dumps(st.session_state.job_config, indent=2),
@@ -603,26 +613,42 @@ with tab3:
         key="results_editor",
     )
 
+    _DISQUALIFY_PHRASES = ("insufficient experience", "not a student", "overqualified")
+
     # Save any decision changes made in the table
     if st.button("💾 Save Decision Changes", key="save_decisions"):
-        changed = 0
-        errors  = 0
+        changed  = 0
+        errors   = 0
+        warnings = []
         for _, orig_row in filtered_df[display_cols].iterrows():
             edited_row = edited_df.loc[orig_row.name] if orig_row.name in edited_df.index else None
             if edited_row is None:
                 continue
             if orig_row["decision"] != edited_row["decision"]:
+                # Warn if overriding a disqualified candidate to shortlisted
+                if edited_row["decision"] == "shortlisted":
+                    reason_lower = str(orig_row.get("decision_reason", "")).lower()
+                    if any(phrase in reason_lower for phrase in _DISQUALIFY_PHRASES):
+                        warnings.append(
+                            f"**{orig_row.get('full_name', orig_row['result_id'])}** — "
+                            f"reason: _{orig_row.get('decision_reason', '')}_"
+                        )
                 try:
                     update_decision(int(orig_row["result_id"]), edited_row["decision"])
                     changed += 1
                 except Exception:
                     errors += 1
+        if warnings:
+            st.warning(
+                "⚠️ You shortlisted candidate(s) with a disqualification reason — "
+                "review before proceeding:\n\n" + "\n\n".join(f"- {w}" for w in warnings)
+            )
         if changed:
             st.success(f"✅ {changed} decision(s) updated.")
             st.cache_data.clear()
         if errors:
             st.error(f"❌ {errors} update(s) failed.")
-        if not changed and not errors:
+        if not changed and not errors and not warnings:
             st.info("No changes detected.")
 
     st.divider()

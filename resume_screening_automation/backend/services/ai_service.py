@@ -10,16 +10,20 @@ def normalize_scoring_weights(weights: dict) -> dict:
 
     # Case 1: AI returned 0–1 scale (floats like 0.3)
     if total <= 1.5:
-        return {k: int(v * 100) for k, v in weights.items()}
+        normalized = {k: int(v * 100) for k, v in weights.items()}
+    elif total != 100:
+        # Case 2: Integers but not summing to 100
+        normalized = {k: int((v / total) * 100) for k, v in weights.items()}
+    else:
+        return weights
 
-    # Case 2: Integers but not summing to 100
-    if total != 100:
-        return {
-            k: int((v / total) * 100)
-            for k, v in weights.items()
-        }
+    # int() truncation can make sum < 100 — add remainder to the largest weight
+    remainder = 100 - sum(normalized.values())
+    if remainder != 0:
+        largest_key = max(normalized, key=lambda k: normalized[k])
+        normalized[largest_key] += remainder
 
-    return weights
+    return normalized
 
 
 def generate_job_config(job_description: str) -> dict:

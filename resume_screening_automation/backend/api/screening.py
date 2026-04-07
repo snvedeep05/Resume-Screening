@@ -222,12 +222,12 @@ def process_zip_and_screen(
                             extracted_data = _normalize_email(extracted_data)
 
                             # Score for this job
-                            score, reason = score_resume(
+                            score, reason, disqualified = score_resume(
                                 job_config,
                                 extracted_data
                             )
 
-                            decision = "shortlisted" if score >= 60 else "rejected"
+                            decision = "rejected" if disqualified or score < 60 else "shortlisted"
 
                             raw_year = extracted_data.get("passed_out_year")
                             if raw_year is None and previous_any is not None:
