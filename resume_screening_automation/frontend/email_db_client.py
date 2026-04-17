@@ -147,7 +147,7 @@ def log_email_sent(
 def get_all_logs(db) -> list:
     from sqlalchemy import text
     rows = db.execute(text("""
-        SELECT
+        SELECT DISTINCT ON (el.log_id)
             el.log_id,
             el.full_name,
             el.email,
@@ -159,10 +159,10 @@ def get_all_logs(db) -> list:
         FROM email_logs el
         LEFT JOIN candidate_pipeline cp
                ON cp.email = el.email
-              AND cp.job_id = el.job_id
+              AND cp.result_id IS NOT NULL
         LEFT JOIN resume_results rr ON rr.result_id = cp.result_id
         LEFT JOIN resume_files   rf ON rf.resume_id = rr.resume_id
-        ORDER BY el.sent_at DESC
+        ORDER BY el.log_id, el.sent_at DESC
     """)).mappings().all()
     return [dict(r) for r in rows]
 
