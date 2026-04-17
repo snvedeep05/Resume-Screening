@@ -86,12 +86,13 @@ df_view = df_logs.copy()
 if filter_type != "All":
     df_view = df_view[df_view["email_type"] == filter_type]
 
-df_view = df_view[["full_name", "email", "email_type", "job_title", "sent_at"]].rename(columns={
-    "full_name":  "Name",
-    "email":      "Email",
-    "email_type": "Type",
-    "job_title":  "Job Title",
-    "sent_at":    "Sent At",
+df_view = df_view[["full_name", "email", "email_type", "job_title", "resume_file", "sent_at"]].rename(columns={
+    "full_name":   "Name",
+    "email":       "Email",
+    "email_type":  "Type",
+    "job_title":   "Job Title",
+    "resume_file": "Resume File",
+    "sent_at":     "Sent At",
 })
 
 st.dataframe(df_view, use_container_width=True)

@@ -22,11 +22,28 @@ from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Background
 from groq import RateLimitError
 
 from db.session import SessionLocal
-from db.models import ResumeRun, ResumeFile, ResumeResult, JobConfig
+from db.models import ResumeRun, ResumeFile, ResumeResult, JobConfig, CandidateProfile
 from services.resume_processor import process_single_resume
 from services.scoring_engine import score_resume
 
 router = APIRouter(prefix="/screening", tags=["Screening"])
+
+
+def _upsert_candidate_profile(db, resume_id: int, extracted_data: dict):
+    """Create or update the candidate_profiles row for this resume."""
+    personal = extracted_data.get("personal_details") or {}
+    profile = db.query(CandidateProfile).filter_by(resume_id=resume_id).first()
+    if not profile:
+        profile = CandidateProfile(resume_id=resume_id)
+        db.add(profile)
+    profile.full_name        = personal.get("full_name")
+    profile.email            = personal.get("email")
+    profile.phone            = personal.get("phone")
+    profile.experience_years = extracted_data.get("experience_years")
+    profile.passed_out_year  = extracted_data.get("passed_out_year")
+    profile.skills           = extracted_data.get("skills", [])
+    profile.education        = extracted_data.get("education", [])
+    profile.projects         = extracted_data.get("projects", [])
 
 
 def get_or_create_resume(db, resume_path: str) -> int:
@@ -220,6 +237,7 @@ def process_zip_and_screen(
                                 extracted_data = extracted["extracted_data"]
 
                             extracted_data = _normalize_email(extracted_data)
+                            _upsert_candidate_profile(db, resume_id, extracted_data)
 
                             # Score for this job
                             score, reason, disqualified = score_resume(
@@ -364,24 +382,30 @@ def get_results(job_id: int, limit: int = 500, offset: int = 0):
             ResumeResult.job_id == job_id
         ).order_by(ResumeResult.processed_at.desc()).offset(offset).limit(limit).all()
 
+        # Fetch all candidate profiles in one query (avoids N+1)
+        resume_ids = [r.resume_id for r in results]
+        profiles = {
+            p.resume_id: p
+            for p in db.query(CandidateProfile).filter(
+                CandidateProfile.resume_id.in_(resume_ids)
+            ).all()
+        }
+
         output = []
-
         for r in results:
-            if r.extracted_data and "personal_details" in r.extracted_data:
-                pd_data = r.extracted_data.get("personal_details", {})
-
-                output.append({
-                    "result_id": r.result_id,
-                    "full_name": pd_data.get("full_name"),
-                    "email": pd_data.get("email"),
-                    "phone": pd_data.get("phone"),
-                    "job_title": job.job_title,
-                    "passed_out_year": r.passed_out_year,
-                    "score": r.score,
-                    "decision": r.decision,
-                    "decision_reason": r.decision_reason,
-                    "processed_at": r.processed_at
-                })
+            p = profiles.get(r.resume_id)
+            output.append({
+                "result_id":      r.result_id,
+                "full_name":      p.full_name       if p else None,
+                "email":          p.email           if p else None,
+                "phone":          p.phone           if p else None,
+                "job_title":      job.job_title,
+                "passed_out_year": r.passed_out_year,
+                "score":          r.score,
+                "decision":       r.decision,
+                "decision_reason": r.decision_reason,
+                "processed_at":   r.processed_at
+            })
 
         return output
 

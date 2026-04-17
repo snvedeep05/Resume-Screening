@@ -1,11 +1,13 @@
 from sqlalchemy import (
     Column,
     Integer,
+    Float,
     Text,
     Boolean,
     JSON,
     ForeignKey,
-    TIMESTAMP
+    TIMESTAMP,
+    UniqueConstraint
 )
 from sqlalchemy.orm import declarative_base
 from sqlalchemy.sql import func
@@ -46,6 +48,26 @@ class ResumeFile(Base):
     file_hash = Column(Text, unique=True, nullable=False)
     file_path = Column(Text)
     uploaded_at = Column(TIMESTAMP, server_default=func.now())
+
+
+class CandidateProfile(Base):
+    __tablename__ = "candidate_profiles"
+    __table_args__ = (UniqueConstraint("resume_id", name="uq_candidate_resume"),)
+
+    profile_id      = Column(Integer, primary_key=True)
+    resume_id       = Column(Integer, ForeignKey("resume_files.resume_id"), nullable=False)
+
+    full_name       = Column(Text)
+    email           = Column(Text)
+    phone           = Column(Text)
+    experience_years = Column(Float)
+    passed_out_year = Column(Integer)
+
+    skills          = Column(JSON)   # list of strings
+    education       = Column(JSON)   # list of {degree, field, institution, passed_out_year}
+    projects        = Column(JSON)   # list of {title, domain, tech_stack}
+
+    extracted_at    = Column(TIMESTAMP, server_default=func.now())
 
 
 class ResumeResult(Base):
