@@ -145,26 +145,19 @@ def log_email_sent(
 
 
 def get_all_logs(db) -> list:
-    from sqlalchemy import text
-    rows = db.execute(text("""
-        SELECT DISTINCT ON (el.log_id)
-            el.log_id,
-            el.full_name,
-            el.email,
-            el.template_id,
-            el.job_title,
-            el.job_id,
-            el.sent_at,
-            rf.file_name AS resume_file
-        FROM email_logs el
-        LEFT JOIN candidate_pipeline cp
-               ON cp.email = el.email
-              AND cp.result_id IS NOT NULL
-        LEFT JOIN resume_results rr ON rr.result_id = cp.result_id
-        LEFT JOIN resume_files   rf ON rf.resume_id = rr.resume_id
-        ORDER BY el.log_id, el.sent_at DESC
-    """)).mappings().all()
-    return [dict(r) for r in rows]
+    rows = db.query(EmailLog).order_by(EmailLog.sent_at.desc()).all()
+    return [
+        {
+            "log_id":      r.log_id,
+            "full_name":   r.full_name,
+            "email":       r.email,
+            "template_id": r.template_id,
+            "job_title":   r.job_title,
+            "job_id":      r.job_id,
+            "sent_at":     r.sent_at,
+        }
+        for r in rows
+    ]
 
 
 # ── CustomEmailLog helpers ─────────────────────────────────────────────────────

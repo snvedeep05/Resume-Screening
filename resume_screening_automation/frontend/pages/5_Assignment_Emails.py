@@ -19,6 +19,20 @@ st.title("📝 Assignment Emails")
 
 show_brevo_usage()
 
+# ── Template download ─────────────────────────────────────────────────────────
+with st.expander("📋 Required Excel format — download template"):
+    st.markdown("Your Excel must have these exact columns:")
+    st.code("full_name | email | job_title", language=None)
+    template_df  = pd.DataFrame(columns=["full_name", "email", "job_title"])
+    template_buf = io.BytesIO()
+    template_df.to_excel(template_buf, index=False)
+    st.download_button(
+        label="⬇️ Download Template",
+        data=template_buf.getvalue(),
+        file_name="assignment_template.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+
 uploaded_excel = st.file_uploader(
     "Upload Excel with interested candidates",
     type=["xlsx"],
